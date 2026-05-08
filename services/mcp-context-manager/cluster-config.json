@@ -1,0 +1,6 @@
+{
+  "clusters": [
+    { "id": "src", "path": "src/", "label": "Source Code", "color": "#4A90D9" },
+    { "id": "tests", "path": "tests/", "label": "Tests", "color": "#E28A4A" }
+  ]
+}

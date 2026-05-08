@@ -1,0 +1,81 @@
+# MCP Services — Standalone Docker Compose
+# These services are developer tooling for AI-assisted code analysis.
+# They run independently from any application stack.
+#
+# Usage:
+#   ./mcp.sh up       — Start MCP services
+#   ./mcp.sh down     — Stop MCP services
+#   ./mcp.sh logs     — Tail logs
+#   ./mcp.sh status   — Show container status
+#
+# See also: services/mcp-context-manager/docs/SETUP.md
+
+services:
+  # ─── MCP Context Manager ──────────────────────────────────────────────
+  # Model Context Protocol service for live folder structure monitoring
+  # and AST parsing of source files
+  mcp-context-manager:
+    build:
+      context: .
+      dockerfile: services/mcp-context-manager/Dockerfile
+    container_name: mcp-context-manager
+    environment:
+      - WORKSPACE_ROOT=/project
+      - HTTP_PORT=3001
+    volumes:
+      # ── Workspace mount ──────────────────────────────────────────────
+      # The entire workspace is mounted at /project.
+      # What gets indexed is controlled by the indexer's glob patterns,
+      # NOT by the volume mount. To restrict indexing to specific paths,
+      # configure PYTHON_WATCH_GLOBS and TS_WATCH_GLOBS (Sprint-2 feature
+      # — accepted env variables, not yet active in the indexer).
+      - ${WORKSPACE_PATH:-.}:/project:ro
+      # The cluster-config is mounted separately at the workspace root so
+      # the indexer can find it at /project/cluster-config.json.
+      - ./services/mcp-context-manager/cluster-config.json:/project/cluster-config.json:ro
+    ports:
+      - "3001:3001"
+    networks:
+      - mcp-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost:3001/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ─── MCP Context UI ───────────────────────────────────────────────────
+  # Standalone React UI for visualizing MCP context graph
+  # Accessible directly on port 8080
+  mcp-context-ui:
+    build:
+      context: ./services/mcp-context-ui
+      dockerfile: Dockerfile
+    container_name: mcp-context-ui
+    ports:
+      - "8080:80"
+    depends_on:
+      mcp-context-manager:
+        condition: service_healthy
+    networks:
+      - mcp-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:80/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+networks:
+  mcp-network:
+    driver: bridge

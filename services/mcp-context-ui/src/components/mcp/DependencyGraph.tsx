@@ -6,18 +6,16 @@
  */
 
 import { useCallback, useMemo } from "react";
-import {
-  ReactFlow,
+import ReactFlow, {
   Background,
   Controls,
   MiniMap,
-  type Node as FlowNode,
-  type Edge as FlowEdge,
   useNodesState,
   useEdgesState,
   ConnectionLineType,
   Panel,
 } from "reactflow";
+import type { Node as FlowNode, Edge as FlowEdge } from "reactflow";
 import "reactflow/dist/style.css";
 import type { Graph, Node, Edge } from "../../types/mcp";
 
@@ -230,7 +228,7 @@ export function DependencyGraph({
         <Background color="#e2e8f0" gap={16} />
         <Controls />
         <MiniMap
-          nodeColor={(node) => {
+          nodeColor={(node: FlowNode) => {
             const mcpNode = node.data.mcpNode as Node;
             return getNodeStyle(mcpNode.type).borderColor;
           }}

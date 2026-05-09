@@ -5,6 +5,7 @@ import type { FSWatcher } from "chokidar";
 
 import { IncrementalIndexer } from "../indexer/incremental-indexer.js";
 import type { GraphStore } from "../graph/graph-store.js";
+import { splitCsvRespectingBraces, resolveIgnorePatterns } from "../utils/glob-utils.js";
 
 const DEFAULT_WATCH_DIRS = ["backend", "frontend/src", "services"];
 
@@ -12,8 +13,8 @@ export function resolveWatchPaths(workspaceRoot: string): string[] {
   const pythonEnv = process.env.PYTHON_WATCH_GLOBS;
   const tsEnv = process.env.TS_WATCH_GLOBS;
   const allGlobs: string[] = [];
-  if (pythonEnv?.trim()) allGlobs.push(...pythonEnv.split(",").map((s) => s.trim()).filter(Boolean));
-  if (tsEnv?.trim()) allGlobs.push(...tsEnv.split(",").map((s) => s.trim()).filter(Boolean));
+  if (pythonEnv?.trim()) allGlobs.push(...splitCsvRespectingBraces(pythonEnv));
+  if (tsEnv?.trim()) allGlobs.push(...splitCsvRespectingBraces(tsEnv));
 
   const dirs = allGlobs.length > 0
     ? [...new Set(allGlobs.map((g) => {
@@ -81,13 +82,7 @@ export class LiveFileWatcher {
     const watchPaths = resolveWatchPaths(this.workspaceRoot);
 
     this.watcher = chokidar.watch(watchPaths, {
-      ignored: [
-        "**/node_modules/**",
-        "**/.git/**",
-        "**/dist/**",
-        "**/venv/**",
-        "**/__pycache__/**",
-      ],
+      ignored: resolveIgnorePatterns(),
       ignoreInitial: true,
       awaitWriteFinish: {
         stabilityThreshold: 150,

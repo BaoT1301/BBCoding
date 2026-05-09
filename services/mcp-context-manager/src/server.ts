@@ -5,7 +5,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 import { GraphStore } from "./graph/graph-store.js";
-import { IncrementalIndexer } from "./indexer/incremental-indexer.js";
+import { IncrementalIndexer, resolveGlobPatterns } from "./indexer/incremental-indexer.js";
 import { registerContextTools } from "./tools/context-tools.js";
 import { LiveFileWatcher } from "./watcher/file-watcher.js";
 import { HttpApiServer } from "./api.js";
@@ -16,6 +16,7 @@ import {
   loadSnapshot,
   createDebouncedSave,
 } from "./graph/graph-persistence.js";
+import { resolveIgnorePatterns } from "./utils/glob-utils.js";
 
 function resolveWorkspaceRoot(): string {
   if (process.env.WORKSPACE_ROOT) {
@@ -70,6 +71,7 @@ async function bootstrap(): Promise<void> {
   if (!flags.stdioOnly) {
     const httpPort = parseInt(process.env.HTTP_PORT || "3001", 10);
     httpApi = new HttpApiServer(graphStore, clusterConfig, httpPort);
+    httpApi.setWorkspaceRoot(workspaceRoot);
     await httpApi.start();
   }
 
@@ -106,6 +108,22 @@ async function bootstrap(): Promise<void> {
       timestamp: Date.now(),
     });
     httpApi.markIndexingComplete(initial.indexedFiles);
+
+    // Set degraded state when 0 files indexed
+    const degraded = initial.indexedFiles === 0;
+    const reasons = degraded ? ["indexed 0 files"] : [];
+    httpApi.setDegradedState(degraded, reasons);
+
+    // Startup banner
+    const { pythonPatterns, tsPatterns } = resolveGlobPatterns();
+    const ignores = resolveIgnorePatterns();
+    const clusters = clusterConfig.getClusters();
+    console.error(
+      `[MCP] workspace=${workspaceRoot} globs=[${[...pythonPatterns, ...tsPatterns].join(", ")}] ignores=${ignores.length} patterns indexed=${initial.indexedFiles} files across ${clusters.length} clusters`,
+    );
+    if (degraded) {
+      console.error("[MCP] WARN: indexed 0 files — run ./mcp.sh doctor");
+    }
   }
 
   // Save snapshot after initial indexing

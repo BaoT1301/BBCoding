@@ -13,6 +13,9 @@ import {
   errorStatusCode,
   type QueryErrorResponse,
 } from "./utils/query-guards.js";
+import { resolveGlobPatterns } from "./indexer/incremental-indexer.js";
+import { resolveIgnorePatterns } from "./utils/glob-utils.js";
+import { detectLanguage } from "./parsers/common.js";
 
 /**
  * Strip the WORKSPACE_ROOT prefix from an absolute file path to produce
@@ -77,6 +80,8 @@ export class HttpApiServer {
   private readonly sseClients = new Set<http.ServerResponse>();
   private keepaliveInterval: NodeJS.Timeout | null = null;
   private indexingState: { complete: boolean; indexedFiles?: number } = { complete: false };
+  private workspaceRoot: string = "";
+  private degradedState: { degraded: boolean; reasons: string[] } = { degraded: false, reasons: [] };
 
   /** Default timeout for query endpoints (ms). */
   private static readonly DEFAULT_TIMEOUT_MS = 5000;
@@ -203,11 +208,23 @@ export class HttpApiServer {
 
     // Health endpoint (versioned)
     if (pathname === "/api/v1/health" && req.method === "GET") {
+      if (this.degradedState.degraded) {
+        return {
+          statusCode: 200,
+          headers: {},
+          body: { status: "degraded", reasons: this.degradedState.reasons },
+        };
+      }
       return {
         statusCode: 200,
         headers: {},
         body: { status: "ok" },
       };
+    }
+
+    // Diagnostics endpoint
+    if (pathname === "/api/v1/diag" && req.method === "GET") {
+      return this.handleDiag();
     }
 
     // Route handling — all under /api/v1/mcp/*
@@ -365,6 +382,44 @@ export class HttpApiServer {
     };
   }
 
+  private handleDiag(): ApiResponse {
+    const { pythonPatterns, tsPatterns } = resolveGlobPatterns();
+    const resolvedIgnores = resolveIgnorePatterns();
+    const filePaths = this.graphStore.getIndexedFilePaths();
+
+    let python = 0;
+    let ts = 0;
+    for (const fp of filePaths) {
+      const lang = detectLanguage(fp);
+      if (lang === "python") python++;
+      else if (lang === "typescript") ts++;
+    }
+
+    // Count files per cluster
+    const clusterHits: Record<string, number> = {};
+    for (const fp of filePaths) {
+      const cluster = this.clusterConfig.getClusterForFile(fp);
+      if (cluster?.id) {
+        clusterHits[cluster.id] = (clusterHits[cluster.id] ?? 0) + 1;
+      }
+    }
+
+    return {
+      statusCode: 200,
+      headers: {},
+      body: {
+        workspaceRoot: this.workspaceRoot,
+        resolvedPythonGlobs: pythonPatterns,
+        resolvedTsGlobs: tsPatterns,
+        resolvedIgnores,
+        fileCount: { total: filePaths.length, python, ts },
+        clusterHits,
+        degraded: this.degradedState.degraded,
+        reasons: this.degradedState.reasons,
+      },
+    };
+  }
+
   private handleGetClusters(): ApiResponse {
     return {
       statusCode: 200,
@@ -386,6 +441,16 @@ export class HttpApiServer {
    */
   markIndexingComplete(indexedFiles: number): void {
     this.indexingState = { complete: true, indexedFiles };
+  }
+
+  /** Store the resolved workspace root for the /api/v1/diag endpoint. */
+  setWorkspaceRoot(root: string): void {
+    this.workspaceRoot = root;
+  }
+
+  /** Update degraded state (called after initial index). */
+  setDegradedState(degraded: boolean, reasons: string[]): void {
+    this.degradedState = { degraded, reasons };
   }
 
   private handleSSEConnection(_req: http.IncomingMessage, res: http.ServerResponse): void {

@@ -81,13 +81,53 @@ Returns service health status.
 curl http://localhost:3001/api/v1/health
 ```
 
-**Response (200):**
+**Response (200 — healthy):**
 
 ```json
 {
   "status": "ok"
 }
 ```
+
+**Response (200 — degraded):**
+
+```json
+{
+  "status": "degraded",
+  "reasons": ["indexed 0 files"]
+}
+```
+
+Always returns HTTP 200. Inspect the `status` field: `"ok"` means fully healthy; `"degraded"` means the service is running but the initial index is empty (e.g., misconfigured `WORKSPACE_PATH`). Run `./mcp.sh doctor` for a full diagnostics snapshot.
+
+---
+
+### Diagnostics
+
+#### GET /api/v1/diag
+
+Returns a diagnostics snapshot of the running instance: resolved workspace root, glob patterns, ignore patterns, file counts per language, per-cluster hit counts, and degraded state.
+
+```bash
+curl http://localhost:3001/api/v1/diag
+```
+
+**Response (200):**
+
+```json
+{
+  "workspaceRoot": "/workspace",
+  "resolvedPythonGlobs": ["**/*.py"],
+  "resolvedTsGlobs": ["**/*.{ts,tsx,js,jsx}"],
+  "resolvedIgnores": ["**/node_modules/**", "**/dist/**", "..."],
+  "fileCount": { "total": 42, "python": 10, "ts": 32 },
+  "clusterHits": { "frontend": 18, "backend": 24 },
+  "degraded": false,
+  "reasons": []
+}
+```
+
+Always returns HTTP 200. Inspect `degraded` for health state. Clusters with 0 hits are omitted from `clusterHits`. Used by `./mcp.sh doctor` and CI health checks.
 
 ---
 
@@ -872,37 +912,38 @@ For detailed SSE architecture, Nginx proxy configuration, reconnection strategie
 | # | Method | Path | Tag |
 |---|--------|------|-----|
 | 1 | GET | `/api/v1/health` | Health |
-| 2 | GET | `/api/v1/mcp/graph` | Graph Export |
-| 3 | GET | `/api/v1/mcp/clusters` | Graph Export |
-| 4 | GET | `/api/v1/mcp/function/:functionName` | Function Context |
-| 5 | POST | `/api/v1/mcp/function` | Function Context |
-| 6 | GET | `/api/v1/mcp/file/:filePath/dependents` | File Dependents |
-| 7 | POST | `/api/v1/mcp/dependents` | File Dependents |
-| 8 | GET | `/api/v1/mcp/symbol/:symbolName/references` | Symbol References |
-| 9 | POST | `/api/v1/mcp/references` | Symbol References |
-| 10 | GET | `/api/v1/mcp/callers/:functionName` | Callers |
-| 11 | POST | `/api/v1/mcp/callers` | Callers |
-| 12 | GET | `/api/v1/mcp/call-chain/:functionName` | Call Chain |
-| 13 | POST | `/api/v1/mcp/call-chain` | Call Chain |
-| 14 | GET | `/api/v1/mcp/dead-code` | Dead Code |
-| 15 | POST | `/api/v1/mcp/dead-code` | Dead Code |
-| 16 | GET | `/api/v1/mcp/hotspots` | Hotspots |
-| 17 | POST | `/api/v1/mcp/hotspots` | Hotspots |
-| 18 | GET | `/api/v1/mcp/impact/:filePath` | Impact Analysis |
-| 19 | POST | `/api/v1/mcp/impact` | Impact Analysis |
-| 20 | GET | `/api/v1/mcp/coupling/:filePathA/:filePathB` | Module Coupling |
-| 21 | POST | `/api/v1/mcp/coupling` | Module Coupling |
-| 22 | GET | `/api/v1/mcp/class-hierarchy/:className` | Class Hierarchy |
-| 23 | POST | `/api/v1/mcp/class-hierarchy` | Class Hierarchy |
-| 24 | GET | `/api/v1/mcp/search` | Search |
-| 25 | POST | `/api/v1/mcp/search` | Search |
-| 26 | GET | `/api/v1/mcp/circular-deps` | Circular Dependencies |
-| 27 | POST | `/api/v1/mcp/circular-deps` | Circular Dependencies |
-| 28 | GET | `/api/v1/mcp/complexity` | Complexity Metrics |
-| 29 | POST | `/api/v1/mcp/complexity` | Complexity Metrics |
-| 30 | GET | `/api/v1/mcp/change-risk` | Change Risk |
-| 31 | POST | `/api/v1/mcp/change-risk` | Change Risk |
-| 32 | GET | `/api/v1/mcp/events` | SSE Events |
+| 2 | GET | `/api/v1/diag` | Diagnostics |
+| 3 | GET | `/api/v1/mcp/graph` | Graph Export |
+| 4 | GET | `/api/v1/mcp/clusters` | Graph Export |
+| 5 | GET | `/api/v1/mcp/function/:functionName` | Function Context |
+| 6 | POST | `/api/v1/mcp/function` | Function Context |
+| 7 | GET | `/api/v1/mcp/file/:filePath/dependents` | File Dependents |
+| 8 | POST | `/api/v1/mcp/dependents` | File Dependents |
+| 9 | GET | `/api/v1/mcp/symbol/:symbolName/references` | Symbol References |
+| 10 | POST | `/api/v1/mcp/references` | Symbol References |
+| 11 | GET | `/api/v1/mcp/callers/:functionName` | Callers |
+| 12 | POST | `/api/v1/mcp/callers` | Callers |
+| 13 | GET | `/api/v1/mcp/call-chain/:functionName` | Call Chain |
+| 14 | POST | `/api/v1/mcp/call-chain` | Call Chain |
+| 15 | GET | `/api/v1/mcp/dead-code` | Dead Code |
+| 16 | POST | `/api/v1/mcp/dead-code` | Dead Code |
+| 17 | GET | `/api/v1/mcp/hotspots` | Hotspots |
+| 18 | POST | `/api/v1/mcp/hotspots` | Hotspots |
+| 19 | GET | `/api/v1/mcp/impact/:filePath` | Impact Analysis |
+| 20 | POST | `/api/v1/mcp/impact` | Impact Analysis |
+| 21 | GET | `/api/v1/mcp/coupling/:filePathA/:filePathB` | Module Coupling |
+| 22 | POST | `/api/v1/mcp/coupling` | Module Coupling |
+| 23 | GET | `/api/v1/mcp/class-hierarchy/:className` | Class Hierarchy |
+| 24 | POST | `/api/v1/mcp/class-hierarchy` | Class Hierarchy |
+| 25 | GET | `/api/v1/mcp/search` | Search |
+| 26 | POST | `/api/v1/mcp/search` | Search |
+| 27 | GET | `/api/v1/mcp/circular-deps` | Circular Dependencies |
+| 28 | POST | `/api/v1/mcp/circular-deps` | Circular Dependencies |
+| 29 | GET | `/api/v1/mcp/complexity` | Complexity Metrics |
+| 30 | POST | `/api/v1/mcp/complexity` | Complexity Metrics |
+| 31 | GET | `/api/v1/mcp/change-risk` | Change Risk |
+| 32 | POST | `/api/v1/mcp/change-risk` | Change Risk |
+| 33 | GET | `/api/v1/mcp/events` | SSE Events |
 
 **Legacy aliases:** `GET /api/health`, `GET /api/mcp/events`
 

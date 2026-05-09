@@ -8,18 +8,21 @@ import { parsePythonFile } from "../parsers/python-parser.js";
 import { parseTypeScriptFile } from "../parsers/typescript-parser.js";
 import { detectLanguage } from "../parsers/common.js";
 import type { FileParseResult } from "../types/schema.js";
+import { splitCsvRespectingBraces, resolveIgnorePatterns } from "../utils/glob-utils.js";
 
-const DEFAULT_PYTHON_PATTERNS = ["backend/**/*.py"];
-const DEFAULT_TS_PATTERNS = ["frontend/src/**/*.{ts,tsx,js,jsx}", "services/**/*.{ts,tsx,js,jsx}"];
+export { splitCsvRespectingBraces, resolveIgnorePatterns };
+
+const DEFAULT_PYTHON_PATTERNS = ["**/*.py"];
+const DEFAULT_TS_PATTERNS = ["**/*.{ts,tsx,js,jsx}"];
 
 export function resolveGlobPatterns(): { pythonPatterns: string[]; tsPatterns: string[] } {
   const pythonEnv = process.env.PYTHON_WATCH_GLOBS;
   const tsEnv = process.env.TS_WATCH_GLOBS;
   const pythonPatterns = pythonEnv?.trim()
-    ? pythonEnv.split(",").map((s) => s.trim()).filter(Boolean)
+    ? splitCsvRespectingBraces(pythonEnv)
     : DEFAULT_PYTHON_PATTERNS;
   const tsPatterns = tsEnv?.trim()
-    ? tsEnv.split(",").map((s) => s.trim()).filter(Boolean)
+    ? splitCsvRespectingBraces(tsEnv)
     : DEFAULT_TS_PATTERNS;
   return { pythonPatterns, tsPatterns };
 }
@@ -48,7 +51,7 @@ export class IncrementalIndexer {
       cwd: this.workspaceRoot,
       absolute: true,
       onlyFiles: true,
-      ignore: ["**/node_modules/**", "**/.git/**", "**/dist/**", "**/venv/**", "**/__pycache__/**"],
+      ignore: resolveIgnorePatterns(),
     });
 
     let count = 0;
@@ -71,7 +74,7 @@ export class IncrementalIndexer {
       cwd: this.workspaceRoot,
       absolute: true,
       onlyFiles: true,
-      ignore: ["**/node_modules/**", "**/.git/**", "**/dist/**", "**/venv/**", "**/__pycache__/**"],
+      ignore: resolveIgnorePatterns(),
     });
 
     const currentFiles = new Set(files.map((f) => normalize(f)));

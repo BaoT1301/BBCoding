@@ -26,6 +26,9 @@ When `--stdio-only` is passed, the server skips HTTP server startup and operates
 
 **HTTP Equivalents:** Each MCP tool has a corresponding HTTP endpoint on port 3001 for programmatic access. See [`./API.md`](./API.md) for the full HTTP API reference.
 
+#### `GET /api/v1/diag`
+Returns resolved workspace root, glob patterns, ignore patterns, file counts per language, cluster hit counts, and degraded state. Used by `./mcp.sh doctor` and CI health checks. Always returns HTTP 200; inspect the `degraded` field for health state.
+
 ---
 
 ## Tool Inventory

@@ -158,6 +158,7 @@ Verify with:
 ```bash
 ./mcp.sh status
 curl http://localhost:3001/api/v1/health   # → {"status":"ok"}
+./mcp.sh doctor                            # → prints workspace, globs, file counts; exits 0 on healthy
 open http://localhost:8080                 # Graph visualization UI
 ```
 
@@ -362,11 +363,11 @@ from .claude/rules/01-global-master-rules.md.
   verify each `path` value exists in your project root.
 - `WORKSPACE_PATH` is set to the wrong directory → check `.env.mcp` and
   confirm the path points to your project root.
-- The indexer's default glob patterns (`backend/**/*.py`,
-  `frontend/src/**/*.{ts,tsx,js,jsx}`, `services/**/*.{ts,tsx,js,jsx}`) don't
-  match your layout → full env-configurable globs are a Sprint-2 feature.
-  Until then, structure your project to match the default paths, or adjust the
-  glob patterns in the indexer source.
+- The indexer's default glob patterns (`**/*.py`, `**/*.{ts,tsx,js,jsx}`) are
+  workspace-wide and should match any layout. If you still see 0 files, verify
+  `WORKSPACE_PATH` in `.env.mcp` points to your project root. To narrow the
+  scope, set `PYTHON_WATCH_GLOBS` and `TS_WATCH_GLOBS` in `.env.mcp`. To add
+  custom excludes, set `WATCH_IGNORES` (comma-separated, brace-expansion safe).
 
 ### 3. AI tool can't find the MCP server
 
@@ -402,6 +403,19 @@ what you observe.
 **Fix:** File an issue. Open `.claude/docs/issues/issues.md` and add a
 description of the discrepancy. The `knowledge_manager` persona will triage it
 in the next sprint's Track 8.
+
+### 6. `./mcp.sh doctor` reports degraded
+
+**Symptom:** `./mcp.sh doctor` exits 4 and prints `degraded: true` with
+`reasons: ["indexed 0 files"]`.
+
+**Causes and fixes:**
+- `WORKSPACE_PATH` in `.env.mcp` points to a directory with no `.py` / `.ts` /
+  `.tsx` / `.js` / `.jsx` files → verify the path and file extensions.
+- Custom `WATCH_IGNORES` is too broad and excludes all files → narrow the
+  pattern.
+- Container just started and initial indexing is still in progress → wait
+  10–30 s and retry.
 
 ---
 

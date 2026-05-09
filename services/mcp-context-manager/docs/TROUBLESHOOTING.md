@@ -238,11 +238,40 @@ docker exec mcp-context-manager ls -la /workspace/
 
 3. **Relative vs absolute paths:** `WORKSPACE_PATH` supports both relative (to the compose file location) and absolute paths. When in doubt, use an absolute path.
 
+4. **Default globs are workspace-wide** (`**/*.py`, `**/*.{ts,tsx,js,jsx}`) and should match any layout. If you still see 0 files, verify `WORKSPACE_PATH` points to your project root. To narrow the scope, set `PYTHON_WATCH_GLOBS` and `TS_WATCH_GLOBS` in `.env.mcp`.
+
+5. **Nested-template layout** (e.g., `.tools/mcp-context-manager/` inside workspace): confirm `WORKSPACE_PATH` points to the project root (not the template directory). The built-in excludes prevent template self-indexing automatically.
+
+6. **Debug which files are being picked up:**
+   ```bash
+   docker exec mcp-context-manager find /workspace -name "*.ts" | grep -v node_modules | head -20
+   ```
+
+7. **Run `./mcp.sh doctor`** for a full diagnostics snapshot including resolved globs, ignore patterns, and per-cluster file counts.
+
 ### Symptom: Files indexed but paths are wrong
 
 **Cause:** `WORKSPACE_ROOT` doesn't match the mount point.
 
 **Fix:** Ensure `WORKSPACE_ROOT=/workspace` in the container environment matches where volumes are mounted (`/workspace/backend`, `/workspace/frontend`, etc.).
+
+---
+
+## WORKSPACE_PATH Validation Errors
+
+### Symptom: `mcp.sh up` exits with "WORKSPACE_PATH does not resolve to an existing directory"
+
+`validate_workspace()` in `mcp.sh` reads `WORKSPACE_PATH` from `.env.mcp`, resolves it relative to the repo root, and exits before starting containers if the path doesn't exist.
+
+**Fix:** Edit `.env.mcp` and set `WORKSPACE_PATH` to your project root. The path can be relative (resolved from the repo root) or absolute. Default is `.` (the repo root itself).
+
+```bash
+# Example: absolute path
+WORKSPACE_PATH=/Users/dev/projects/my-app
+
+# Example: relative path (from repo root)
+WORKSPACE_PATH=../my-other-project
+```
 
 ---
 

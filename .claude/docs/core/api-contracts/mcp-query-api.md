@@ -610,3 +610,57 @@ New Sprint 3 endpoints use existing types in their responses. No new runtime dep
 | 2026-05-01 | v1.0 — Initial contract, Sprint 1 query tools (callers, call chain, dead code, impact analysis) | Knowledge Manager |
 | 2026-05-02 | v3.0 — Sprint 3 endpoints (circular deps, complexity metrics, change risk), graph persistence documentation, Sprint 2 endpoint stubs, fixed missing change-risk route registration (Issue #15) | DevOps & QA Engineer |
 
+
+---
+
+## Amendment: Degraded Health Status (Sprint 3 Track 3)
+
+**Date:** 2026-05-08
+**Author:** `internal_tooling_engineer`
+
+### `/api/v1/health` — Degraded Response
+
+When the initial index completes with 0 files indexed, `/api/v1/health` returns
+a degraded response body. The HTTP status code remains **200** so Docker's
+healthcheck (`wget -qO /dev/null http://localhost:3001/api/health`) continues to
+pass and the container stays in the `healthy` state. Consumers must inspect the
+JSON body to detect degradation.
+
+**Healthy response (unchanged):**
+```json
+{ "status": "ok" }
+```
+
+**Degraded response (new):**
+```json
+{
+  "status": "degraded",
+  "reasons": ["indexed 0 files"]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | `"ok" \| "degraded"` | `"ok"` when healthy; `"degraded"` when one or more conditions are met |
+| `reasons` | `string[]` | Present only when `status === "degraded"`. Lists human-readable degradation reasons. |
+
+**Degraded conditions:**
+
+| Condition | `reasons` entry |
+|-----------|-----------------|
+| Initial index returned 0 files | `"indexed 0 files"` |
+
+The `reasons` array is additive — future sprints may append new conditions
+without breaking existing consumers that only check `status`.
+
+### Legacy `/api/health` alias
+
+The legacy `/api/health` alias continues to return `{ "status": "ok" }` always
+(no degraded state). It is used exclusively by Docker's healthcheck and must
+not be changed. Consumers that need degraded-state awareness must use
+`/api/v1/health`.
+
+### Related
+
+- Full diagnostics (globs, file counts, cluster hits): `GET /api/v1/diag`
+  — see [`mcp-diag-api.md`](./mcp-diag-api.md)

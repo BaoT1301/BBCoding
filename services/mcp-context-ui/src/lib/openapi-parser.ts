@@ -73,8 +73,8 @@ const ENDPOINT_DATA: EndpointDef[] = [
     operationId: "getHealth",
     tag: "Health",
     parameters: [],
-    responseExample: { status: "ok" },
-    responseDescription: "Service is healthy",
+    responseExample: { status: "ok | degraded", reasons: [] },
+    responseDescription: "Service is healthy or degraded (running but 0 files indexed)",
   },
   // Graph Export
   {

@@ -44,7 +44,7 @@ import {
 } from "../lib/docker-compose-generator";
 import api from "../api/instance";
 
-type HealthStatus = "loading" | "healthy" | "unhealthy";
+type HealthStatus = "loading" | "healthy" | "degraded" | "unhealthy";
 
 const WIZARD_STEPS: WizardStep[] = [
   { id: "prerequisites", title: "Prerequisites", description: "Verify required tools are installed." },
@@ -66,10 +66,15 @@ export default function SetupPage() {
     async function checkHealth() {
       try {
         const response = await api.get("/health", { timeout: 5000 });
-        if (!cancelled && response.data?.status === "ok") {
-          setHealthStatus("healthy");
-        } else {
-          setHealthStatus("unhealthy");
+        if (!cancelled) {
+          const s = response.data?.status;
+          if (s === "ok") {
+            setHealthStatus("healthy");
+          } else if (s === "degraded") {
+            setHealthStatus("degraded");
+          } else {
+            setHealthStatus("unhealthy");
+          }
         }
       } catch {
         if (!cancelled) {
@@ -185,6 +190,9 @@ function HealthCheckSection({ status }: { status: HealthStatus }) {
           {status === "healthy" && (
             <StatusBadge variant="success" label="✓ MCP Context Manager is running" />
           )}
+          {status === "degraded" && (
+            <StatusBadge variant="warning" label="⚠ Service degraded — 0 files indexed" />
+          )}
           {status === "unhealthy" && (
             <StatusBadge variant="error" label="✗ Service not reachable" />
           )}
@@ -192,6 +200,8 @@ function HealthCheckSection({ status }: { status: HealthStatus }) {
         <CardDescription>
           {status === "healthy"
             ? "The MCP Context Manager is running and healthy. You can skip the setup wizard or reconfigure."
+            : status === "degraded"
+            ? "The MCP Context Manager is running but indexed 0 files. Check WORKSPACE_PATH and glob patterns, then reconfigure below."
             : status === "unhealthy"
             ? "The MCP Context Manager is not reachable. Follow the setup wizard below to get started."
             : "Checking connection to MCP Context Manager..."}
@@ -630,7 +640,7 @@ function ManualSetupSection({ config }: { config: DockerConfig }) {
             <h3 className="text-sm font-semibold text-slate-900">3. Verify the service is healthy</h3>
             <div className="relative">
               <CodeBlock
-                code={`curl http://localhost:${config.httpPort}/api/v1/health\n# Expected: {"status":"ok"}`}
+                code={`curl http://localhost:${config.httpPort}/api/v1/health\n# Expected: {"status":"ok"} or {"status":"degraded","reasons":[...]}`}
                 language="bash"
                 title="Terminal"
               />

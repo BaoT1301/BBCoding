@@ -19,6 +19,12 @@ services:
       context: .
       dockerfile: services/mcp-context-manager/Dockerfile
     container_name: mcp-context-manager
+    # env_file loads WORKSPACE_PATH and optional overrides from .env.mcp.
+    # The explicit environment: block below takes precedence over env_file
+    # values for WORKSPACE_ROOT and HTTP_PORT (Compose merge order).
+    env_file:
+      - path: .env.mcp
+        required: false
     environment:
       - WORKSPACE_ROOT=/project
       - HTTP_PORT=3001
@@ -32,6 +38,13 @@ services:
       - ${WORKSPACE_PATH:-.}:/project:ro
       # The cluster-config is mounted separately at the workspace root so
       # the indexer can find it at /project/cluster-config.json.
+      # NOTE (Sprint-3): When WORKSPACE_PATH=. (default, repo-root layout) this
+      # overlay is redundant because cluster-config.json is already present in
+      # the workspace volume above. It is kept here so that nested-template
+      # layouts (e.g. collab-guard, where WORKSPACE_PATH=../.. points above the
+      # template dir) still get the config injected correctly. See Sprint-3
+      # issues.md entry on the :ro overlay for the follow-up to make this
+      # conditional.
       - ./services/mcp-context-manager/cluster-config.json:/project/cluster-config.json:ro
     ports:
       - "3001:3001"

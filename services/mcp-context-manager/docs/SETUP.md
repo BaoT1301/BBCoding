@@ -24,13 +24,17 @@ The MCP services run in an isolated Docker Compose stack, separate from the main
 
 The `WORKSPACE_PATH` variable tells MCP which directory to scan. By default it uses the current directory (`.`).
 
+`./mcp.sh up` automatically copies `.env.mcp.example` → `.env.mcp` on first run, so manual copying is optional. Only copy manually if you want to customize values before the first `up`.
+
 ```bash
-# Copy the example env file
+# Optional: copy manually to customize before first run
 cp .env.mcp.example .env.mcp
 
 # Edit if your workspace is elsewhere
 # WORKSPACE_PATH=/path/to/your/project
 ```
+
+> **Validation:** If `WORKSPACE_PATH` doesn't resolve to an existing directory, `mcp.sh` exits before starting containers with a clear error. Edit `.env.mcp` and correct the path.
 
 **Examples:**
 
@@ -112,6 +116,9 @@ The HTTP API (port 3001) is used exclusively by the MCP Context UI for visualiza
 | `HTTP_PORT` | `3001` | Port for the HTTP API server |
 | `GRAPH_SNAPSHOT_DIR` | `.mcp-cache/` or `/tmp/.mcp-cache/` (Docker) | Directory for graph snapshot persistence |
 | `WORKSPACE_PATH` | `.` (compose variable) | Host path mounted into the container as `/workspace` |
+| `PYTHON_WATCH_GLOBS` | `**/*.py` | Comma-separated glob patterns for Python files (workspace-wide, brace-expansion safe) |
+| `TS_WATCH_GLOBS` | `**/*.{ts,tsx,js,jsx}` | Comma-separated glob patterns for TypeScript/JavaScript files (workspace-wide, brace-expansion safe) |
+| `WATCH_IGNORES` | *(14-entry built-in list)* | Comma-separated glob patterns to exclude from indexing and watching. Defaults cover `node_modules`, `dist`, `build`, `.next`, `.turbo`, `coverage`, `.git`, `.venv`, `venv`, `__pycache__`, `.tools/mcp-context-*`, `services/mcp-context-*`, `.kiro`, `.claude`. |
 
 ---
 
@@ -167,7 +174,7 @@ Key points:
 ## CLI Reference (`mcp.sh`)
 
 ```bash
-./mcp.sh up          # Start MCP services (docker compose up -d)
+./mcp.sh up          # Start MCP services (docker compose up -d); auto-copies .env.mcp on first run
 ./mcp.sh down        # Stop MCP services
 ./mcp.sh build       # Build Docker images
 ./mcp.sh logs        # Tail logs (Ctrl+C to stop)
@@ -176,6 +183,7 @@ Key points:
 ./mcp.sh status      # Show container status
 ./mcp.sh test        # Run vitest test suite
 ./mcp.sh shell       # Open sh in the manager container
+./mcp.sh doctor      # Call /api/v1/diag, pretty-print result; exits 0 (healthy) / 2 (container down) / 3 (curl fail) / 4 (degraded)
 ```
 
 ---

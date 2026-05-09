@@ -485,7 +485,7 @@ export default function AgentsPage() {
         <CodeBlock
           code={`# Check if the service is running
 curl http://localhost:3001/api/v1/health
-# Expected: {"status":"ok"}
+# Expected: {"status":"ok"} or {"status":"degraded","reasons":[...]}
 
 # Test a simple tool call
 curl "http://localhost:3001/api/v1/mcp/search?query=main&max_results=5"

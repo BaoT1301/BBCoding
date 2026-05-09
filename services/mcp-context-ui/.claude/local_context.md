@@ -144,6 +144,8 @@ export const GraphSchema = z.object({
 });
 ```
 
+**Health Endpoint (`/api/v1/health`):** Returns `{ status: "ok" }` when healthy, or `{ status: "degraded", reasons: string[] }` when running but 0 files are indexed. The `SetupPage.tsx` `HealthStatus` union includes `"degraded"` as a first-class state. Degraded state shows a yellow warning badge (`"⚠ Service degraded — 0 files indexed"`) and the setup wizard (same as unhealthy), but the Reconfigure button is hidden.
+
 **CRITICAL RULE:** When the backend schema changes, the frontend Zod schemas **MUST** be updated to match. Failure to do so will cause runtime validation errors.
 
 **Historical Incident:** In April 2026, the backend added the `"external"` node type, but the frontend schema was not updated. This caused ~2000 Zod validation errors in production. See `SCHEMA-FIX.md` for full details.
@@ -799,6 +801,6 @@ When making changes to this service:
 
 ---
 
-**Last Updated:** 2026-05-05 (MCP Documentation Portal — Sprint 4 state sync)  
+**Last Updated:** 2026-05-08 (Sprint 4 Bug-Fix — degraded health state sync)  
 **Service Version:** 3.0.0  
 **Maintainer:** Knowledge Manager

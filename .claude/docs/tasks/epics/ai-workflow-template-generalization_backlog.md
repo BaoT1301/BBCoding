@@ -14,6 +14,10 @@
 - **Sprint 2:** Interactive `setup.sh` initializer + env-configurable indexer globs + service-level `local_context.md` cleanup + example presets (Next.js, Django+React, monorepo) + remaining chuchube scans + AI-tool-config adopter walkthroughs ✅ COMPLETE — Items E (remaining), F (all four files), J (all three sub-items), L (all five sub-items), M (all three sub-items)
 - **Sprint 3:** End-to-end verification + polish (to be scheduled)
 
+**Sprint 3 Bug-Fix (2026-05-08):** Fresh-clone bootstrap defects resolved — env-load fix, brace-aware glob splitter, workspace-wide defaults + excludes, `/api/v1/diag` endpoint, `./mcp.sh doctor` CLI, bootstrap integration test on `collab-guard` fixture. ✅ COMPLETE
+
+**Sprint 4 Bug-Fix (2026-05-08):** UI health status regression fixed — `SetupPage.tsx` false-negative where `degraded` status was mapped to `unhealthy`. Added `"degraded"` to `HealthStatus` union, yellow warning badge, wizard visibility confirmed, static copy updated in `AgentsPage.tsx` and `openapi-parser.ts`, 3-case test suite added (301/28 green). ✅ COMPLETE
+
 **Sprint 1 scope adjustment (2026-05-07):** Foundation audit was split into two tracks (mechanical fixes; global rule elevation) to reduce fsWrite payload risk. To keep within `MAX_TOTAL_TRACKS = 8`, the `setup.sh` interactive initializer was deferred to Sprint 2. Sprint 1's README documents the **manual** adoption path; Sprint 2 will add the script and update the README's Quick Start accordingly.
 
 ---
@@ -22,8 +26,8 @@
 
 ### N. End-to-End Verification (Future Sprint)
 
-- [ ] Dry-run: fresh clone → follow root `README.md` steps → MCP services up and indexing user-provided files
-- [ ] Re-run `services/mcp-context-manager` vitest suite after indexer env-var changes
+- [x] Dry-run: fresh clone → follow root `README.md` steps → MCP services up and indexing user-provided files *(Sprint 3 Bug-Fix)*
+- [x] Re-run `services/mcp-context-manager` vitest suite after indexer env-var changes *(Sprint 3 Bug-Fix — 356/37 green)*
 - [ ] Verify AI tool integration: point Kiro / Cursor / Claude Desktop at the template output, confirm MCP tools resolve
 - [ ] Confirm `setup.sh` is idempotent (running twice produces the same config)
 

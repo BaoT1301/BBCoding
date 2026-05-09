@@ -31,12 +31,12 @@ export function resolveSnapshotPath(workspaceRoot: string): string {
     return path.join(process.env.GRAPH_SNAPSHOT_DIR, "graph-snapshot.json");
   }
 
-  // In Docker the workspace is typically /workspace with :ro mounts.
-  // Use /tmp as a writable fallback.
-  const cacheDir =
-    workspaceRoot === "/workspace"
-      ? path.join(os.tmpdir(), ".mcp-cache")
-      : path.join(workspaceRoot, ".mcp-cache");
+  // In Docker the workspace is mounted :ro (typically /workspace or /project).
+  // Use /tmp as a writable fallback when the workspace root is not writable.
+  const isDockerReadOnly = workspaceRoot === "/workspace" || workspaceRoot === "/project";
+  const cacheDir = isDockerReadOnly
+    ? path.join(os.tmpdir(), ".mcp-cache")
+    : path.join(workspaceRoot, ".mcp-cache");
 
   return path.join(cacheDir, "graph-snapshot.json");
 }

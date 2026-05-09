@@ -34,8 +34,9 @@ the full annotated reference.
 | `WORKSPACE_PATH` | `.` | Host path mounted as `/project` inside the container |
 | `HTTP_PORT` | `3001` | Port the Context Manager HTTP API listens on |
 | `GRAPH_SNAPSHOT_DIR` | *(internal)* | Override snapshot persistence directory |
-| `PYTHON_WATCH_GLOBS` | `backend/**/*.py` | Glob for Python files *(Sprint-2 feature)* |
-| `TS_WATCH_GLOBS` | `frontend/src/**/*.{ts,tsx,js,jsx},services/**/*.{ts,tsx,js,jsx}` | Glob for TS/JS files *(Sprint-2 feature)* |
+| `PYTHON_WATCH_GLOBS` | `**/*.py` | Glob for Python files (workspace-wide) |
+| `TS_WATCH_GLOBS` | `**/*.{ts,tsx,js,jsx}` | Glob for TS/JS files (workspace-wide) |
+| `WATCH_IGNORES` | *(14-entry built-in list)* | Comma-separated globs to exclude from indexing and watching (brace-expansion safe). Defaults cover `node_modules`, `dist`, `build`, `.next`, `.turbo`, `coverage`, `.git`, `.venv`, `venv`, `__pycache__`, `.tools/mcp-context-*`, `services/mcp-context-*`, `.kiro`, `.claude`. |
 
 ---
 
@@ -49,8 +50,9 @@ The entire workspace is mounted read-only at `/project`:
 
 What gets **indexed** is controlled by the indexer's glob patterns, not the
 volume boundary. The full-workspace mount is intentional — it avoids
-rebuilding the container when you add new top-level directories. Glob-based
-filtering (Sprint-2) will let you restrict indexing without changing the mount.
+rebuilding the container when you add new top-level directories. Use
+`PYTHON_WATCH_GLOBS`, `TS_WATCH_GLOBS`, and `WATCH_IGNORES` to control scope
+without changing the mount.
 
 The cluster-config file is mounted separately:
 
@@ -69,6 +71,20 @@ schema and `docs/CLUSTER-CONFIG.md` for the full guide.
 > file to `services/mcp-context-manager/cluster-config.json`, or edit that
 > file directly. The root-level copy is not read by the container.
 
+### Nested-template layouts (collab-guard pattern)
+
+When the MCP template itself lives inside the workspace (e.g., at
+`.tools/mcp-context-manager/`), the built-in `**/.tools/mcp-context-*/**`
+exclude prevents the indexer from indexing its own source code.
+Set `WORKSPACE_PATH=../..` (relative to the compose file) so the indexer
+roots at the project root, not inside the template directory.
+App code at sibling directories (e.g., `collab-guard/src/`, `extension/`)
+is picked up by the workspace-wide defaults automatically.
+
+The cluster-config overlay mount ensures the indexer finds the config at
+`/project/cluster-config.json` even when the workspace root is a parent
+directory above the template.
+
 ---
 
 ## Management Commands
@@ -77,7 +93,7 @@ All operations go through `./mcp.sh`:
 
 ```bash
 ./mcp.sh build    # Build Docker images
-./mcp.sh up       # Start services (detached)
+./mcp.sh up       # Start services (detached); auto-copies .env.mcp.example → .env.mcp on first run
 ./mcp.sh down     # Stop and remove containers
 ./mcp.sh restart  # Restart running containers
 ./mcp.sh status   # Show container status and health
@@ -85,7 +101,18 @@ All operations go through `./mcp.sh`:
 ./mcp.sh test     # Run the Context Manager test suite
 ./mcp.sh dev      # Start both services locally without Docker
 ./mcp.sh shell    # Open a shell in the mcp-context-manager container
+./mcp.sh doctor   # Call /api/v1/diag, pretty-print result; exits 0 (healthy) / 2 (container down) / 3 (curl fail) / 4 (degraded)
 ```
+
+### `mcp.sh` internals (Sprint 3)
+
+- **`env_file_flag()`**: Emits `--env-file .env.mcp` when the file exists; all `docker compose` invocations use it. Safe on clean clones (flag omitted when file absent).
+- **`validate_workspace()`**: Reads `WORKSPACE_PATH` from `.env.mcp`, resolves relative to the repo root (`COMPOSE_DIR`), exits 1 with a diagnostic message if the path doesn't exist. Called by `up`, `restart`, `build`.
+- **Auto-copy**: `mcp.sh up` copies `.env.mcp.example` → `.env.mcp` on first run and prints `✓ Created .env.mcp from .env.mcp.example`.
+
+### Docker Compose — `mcp-context-manager` service
+
+`env_file: .env.mcp` (required: false) is declared before the explicit `environment:` block. Compose merge order ensures `WORKSPACE_ROOT` and `HTTP_PORT` from the explicit block always win over values in the env file.
 
 For a production-style deploy (build → health-check → restart):
 
@@ -127,10 +154,10 @@ docker info
 ```
 
 **2. Indexer reports 0 files indexed**
-The workspace mount path may not contain the expected source directories.
-Verify `WORKSPACE_PATH` points to your project root and that the directories
-referenced in `cluster-config.json` exist inside it. Full glob-based
-configuration is a Sprint-2 feature.
+The workspace mount path may not contain the expected source files.
+Verify `WORKSPACE_PATH` points to your project root. The default glob patterns
+(`**/*.py`, `**/*.{ts,tsx,js,jsx}`) are workspace-wide. If you still see 0
+files, run `./mcp.sh doctor` for a full diagnostics snapshot.
 
 **3. Port conflict (3001 or 8080 already in use)**
 Set `HTTP_PORT` in your `.env` file and update the `ports` mapping in

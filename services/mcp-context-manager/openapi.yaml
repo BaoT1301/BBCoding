@@ -62,17 +62,96 @@ paths:
       operationId: getHealth
       responses:
         "200":
-          description: Service is healthy
+          description: Service is healthy or degraded. Always HTTP 200 — inspect `status` field.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    properties:
+                      status:
+                        type: string
+                        enum: [ok]
+                  - type: object
+                    properties:
+                      status:
+                        type: string
+                        enum: [degraded]
+                      reasons:
+                        type: array
+                        items:
+                          type: string
+              examples:
+                healthy:
+                  value:
+                    status: ok
+                degraded:
+                  value:
+                    status: degraded
+                    reasons: ["indexed 0 files"]
+
+  /api/v1/diag:
+    get:
+      tags: [Health]
+      summary: Diagnostics snapshot
+      description: Returns resolved workspace root, glob patterns, ignore patterns, file counts, cluster hits, and degraded state. Used by `./mcp.sh doctor` and CI health checks.
+      operationId: getDiag
+      responses:
+        "200":
+          description: Always 200. Inspect `degraded` field for health state.
           content:
             application/json:
               schema:
                 type: object
+                required: [workspaceRoot, resolvedPythonGlobs, resolvedTsGlobs, resolvedIgnores, fileCount, clusterHits, degraded, reasons]
                 properties:
-                  status:
+                  workspaceRoot:
                     type: string
-                    enum: [ok]
+                  resolvedPythonGlobs:
+                    type: array
+                    items:
+                      type: string
+                  resolvedTsGlobs:
+                    type: array
+                    items:
+                      type: string
+                  resolvedIgnores:
+                    type: array
+                    items:
+                      type: string
+                  fileCount:
+                    type: object
+                    properties:
+                      total:
+                        type: integer
+                      python:
+                        type: integer
+                      ts:
+                        type: integer
+                  clusterHits:
+                    type: object
+                    additionalProperties:
+                      type: integer
+                  degraded:
+                    type: boolean
+                  reasons:
+                    type: array
+                    items:
+                      type: string
               example:
-                status: ok
+                workspaceRoot: /workspace
+                resolvedPythonGlobs: ["**/*.py"]
+                resolvedTsGlobs: ["**/*.{ts,tsx,js,jsx}"]
+                resolvedIgnores: ["**/node_modules/**", "**/dist/**"]
+                fileCount:
+                  total: 42
+                  python: 10
+                  ts: 32
+                clusterHits:
+                  frontend: 18
+                  backend: 24
+                degraded: false
+                reasons: []
 
   /api/v1/mcp/graph:
     get:

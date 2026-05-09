@@ -238,7 +238,7 @@ Browser EventSource (exponential backoff reconnection)
 **Response Format**: JSON with `{ nodes: [], edges: [] }` at top level
 
 **Endpoints**:
-1. `GET /api/v1/health` → `{ status: "ok" }` (also available at `/api/health` as alias)
+1. `GET /api/v1/health` → `{ status: "ok" }` or `{ status: "degraded", reasons: string[] }` (also available at `/api/health` as alias; always HTTP 200)
 2. `GET /api/v1/mcp/graph?scope=repo&max_nodes=2000&max_edges=4000`
 3. `GET /api/v1/mcp/function/:functionName?file_path=...&max_hops=2`
 4. `POST /api/v1/mcp/function` (body: `{ function_name, file_path, max_hops }`)
@@ -270,6 +270,7 @@ Browser EventSource (exponential backoff reconnection)
 30. `POST /api/v1/mcp/complexity` (body: `{ file_path, kind, language, sort_by, max_results }`)
 31. `GET /api/v1/mcp/change-risk?changed_files=file1,file2&max_depth=3&max_files=100`
 32. `POST /api/v1/mcp/change-risk` (body: `{ changed_files: string[], max_depth, max_files }`)
+33. `GET /api/v1/diag` → diagnostics snapshot (workspaceRoot, globs, ignores, fileCount, clusterHits, degraded, reasons)
 
 **Graph Export Extensions (Phase 1 & Phase 2):**
 - `GET /api/mcp/graph` nodes now include optional `lat`, `lng`, `clusterId` fields when geographic mapping is active
@@ -362,17 +363,17 @@ interface GraphEdge {
 ## File Patterns
 
 ### Python Files
-- **Pattern**: `backend/**/*.py` *(configurable via `PYTHON_WATCH_GLOBS`)*
-- **Excludes**: `**/node_modules/**`, `**/.git/**`, `**/dist/**`, `**/venv/**`, `**/__pycache__/**`
+- **Pattern**: `**/*.py` *(configurable via `PYTHON_WATCH_GLOBS`)*
+- **Excludes**: `**/node_modules/**`, `**/.git/**`, `**/dist/**`, `**/venv/**`, `**/__pycache__/**`, plus 9 more via `WATCH_IGNORES`
 - **Parser**: `parsers/python-parser.ts` (Tree-sitter)
 - **Emits**: `imports`, `defines`, `calls`, `reads`, `writes`, `references`, `inherits` (class base classes, including multiple inheritance)
 
 ### TypeScript Files
-- **Pattern**: `frontend/src/**/*.{ts,tsx,js,jsx}`, `services/**/*.{ts,tsx,js,jsx}` *(configurable via `TS_WATCH_GLOBS`)*
-- **Excludes**: Same as Python
+- **Pattern**: `**/*.{ts,tsx,js,jsx}` *(configurable via `TS_WATCH_GLOBS`)*
+- **Excludes**: Same as Python (14-entry built-in list, overridable via `WATCH_IGNORES`)
 - **Parser**: `parsers/typescript-parser.ts` (Tree-sitter)
 - **Emits**: `imports`, `defines`, `calls`, `reads`, `writes`, `references`, `exports`, `inherits` (`extends` and `implements` clauses)
-- **Watch Paths**: Derived from `TS_WATCH_GLOBS` (defaults: `backend/`, `frontend/src/`, `services/`)
+- **Watch Paths**: Derived from `TS_WATCH_GLOBS` (default: workspace-wide)
 
 ### Import Resolution
 
@@ -424,11 +425,14 @@ interface GraphEdge {
 - **`HTTP_PORT`**: HTTP API server port (default: `3001`)
 - **`GRAPH_SNAPSHOT_DIR`**: Override directory for graph snapshot file. If unset, defaults to `{WORKSPACE_ROOT}/.mcp-cache/` (or `/tmp/.mcp-cache/` when `WORKSPACE_ROOT=/workspace` in Docker).
 - **`PYTHON_WATCH_GLOBS`**: Comma-separated glob patterns for Python files to index and watch.
-  - Default: `backend/**/*.py`
+  - Default: `**/*.py` (workspace-wide)
   - Example: `PYTHON_WATCH_GLOBS=myapp/**/*.py,tests/**/*.py`
 - **`TS_WATCH_GLOBS`**: Comma-separated glob patterns for TypeScript/JavaScript files to index and watch.
-  - Default: `frontend/src/**/*.{ts,tsx,js,jsx},services/**/*.{ts,tsx,js,jsx}`
+  - Default: `**/*.{ts,tsx,js,jsx}` (workspace-wide)
   - Example: `TS_WATCH_GLOBS=src/**/*.{ts,tsx},packages/**/*.{ts,tsx}`
+- **`WATCH_IGNORES`**: Comma-separated glob patterns to exclude from indexing and watching.
+  - Default: 14-entry list (node_modules, dist, build, .next, .turbo, coverage, .git, .venv, venv, __pycache__, .tools/mcp-context-*, services/mcp-context-*, .kiro, .claude)
+  - Example: `WATCH_IGNORES=custom/**,other/**`
 
 ---
 
@@ -570,7 +574,7 @@ docker exec -i mcp-context-manager node /app/dist/server.js --stdio-only
 ## Testing Strategy
 
 ### Current State
-- **Unit Tests**: Vitest (296 tests across 31 test files)
+- **Unit Tests**: Vitest (356 tests across 37 test files)
 - **Test Files**:
   - `src/__tests__/geographic-mapper.test.ts` (10 tests)
   - `src/__tests__/cluster-config-loader.test.ts` (15 tests)

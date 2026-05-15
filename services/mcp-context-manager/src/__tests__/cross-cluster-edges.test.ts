@@ -288,4 +288,46 @@ describe("Track 1: Cross-Cluster Edge Detection & Graph Export Enhancements", ()
       }
     });
   });
+
+  describe("Property: Alias-resolved cross-cluster edge", () => {
+    it("should detect a cross-cluster edge when the import was resolved via tsconfig alias", async () => {
+      // Simulate: frontend file imports a services file via an alias that was
+      // resolved by TsconfigResolver before being stored as resolvedImports.
+      // The graph receives the already-resolved absolute path — same as any other import.
+      graphStore.upsertFileResult(makeFileResult("services/mcp-context-manager/src/api.ts", "typescript"));
+      graphStore.upsertFileResult(
+        makeFileResult(
+          "frontend/src/hooks/useGraph.ts",
+          "typescript",
+          // resolvedImports already contain the alias-resolved path
+          ["services/mcp-context-manager/src/api.ts"],
+        ),
+      );
+
+      const port = 19800 + Math.floor(Math.random() * 900);
+      const httpApi = new HttpApiServer(graphStore, clusterConfig, port);
+      await httpApi.start();
+
+      try {
+        const response = await fetch(`http://localhost:${port}/api/v1/mcp/graph?scope=repo`);
+        const data = await response.json();
+
+        // The edge from frontend → services should be cross-cluster
+        const crossEdges = data.edges.filter((e: any) => e.isCrossCluster === true);
+        expect(crossEdges.length).toBeGreaterThan(0);
+
+        // Verify the edge connects frontend and mcp-services clusters
+        const frontendNode = data.nodes.find((n: any) =>
+          n.filePath?.includes("frontend/src/hooks/useGraph"),
+        );
+        const servicesNode = data.nodes.find((n: any) =>
+          n.filePath?.includes("services/mcp-context-manager/src/api"),
+        );
+        expect(frontendNode?.clusterId).toBe("frontend");
+        expect(servicesNode?.clusterId).toBe("mcp-services");
+      } finally {
+        await httpApi.stop();
+      }
+    });
+  });
 });

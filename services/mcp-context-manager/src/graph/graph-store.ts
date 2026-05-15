@@ -11,6 +11,7 @@ import type {
   Language,
   SymbolDefinition,
   SymbolKind,
+  UnresolvedImportEntry,
 } from "../types/schema.js";
 import { InvalidParamsError, NotFoundError } from "../utils/query-guards.js";
 
@@ -47,6 +48,8 @@ export class GraphStore {
 
   private readonly fileHashes = new Map<string, string>();
 
+  private readonly unresolvedImportsByFile = new Map<string, UnresolvedImportEntry[]>();
+
   hasFileHash(filePath: string, hash: string): boolean {
     return this.fileHashes.get(normalizePath(filePath)) === hash;
   }
@@ -64,11 +67,63 @@ export class GraphStore {
     return dependents ? [...dependents] : [];
   }
 
+  getUnresolvedImports(filePattern?: string): Array<{ filePath: string; unresolved: UnresolvedImportEntry[] }> {
+    const results: Array<{ filePath: string; unresolved: UnresolvedImportEntry[] }> = [];
+    const matcher = filePattern ? this.makeGlobMatcher(filePattern) : null;
+    for (const [filePath, unresolved] of this.unresolvedImportsByFile) {
+      if (matcher && !matcher(filePath)) continue;
+      results.push({ filePath, unresolved });
+    }
+    return results;
+  }
+
+  getUnresolvedSummary(): {
+    resolvedEdges: number;
+    unresolvedSpecifiers: number;
+    skippedExternals: number;
+    topUnresolvedReasons: Record<string, number>;
+  } {
+    // Count resolved edges (imports edges in graph)
+    let resolvedEdges = 0;
+    for (const [, imports] of this.importsByFile) {
+      resolvedEdges += imports.size;
+    }
+
+    let unresolvedSpecifiers = 0;
+    const topUnresolvedReasons: Record<string, number> = {};
+    for (const entries of this.unresolvedImportsByFile.values()) {
+      for (const entry of entries) {
+        unresolvedSpecifiers++;
+        topUnresolvedReasons[entry.reason] = (topUnresolvedReasons[entry.reason] ?? 0) + 1;
+      }
+    }
+
+    // skippedExternals: not tracked at graph level; return 0 (tracked in indexer logs)
+    return { resolvedEdges, unresolvedSpecifiers, skippedExternals: 0, topUnresolvedReasons };
+  }
+
+  private makeGlobMatcher(pattern: string): (filePath: string) => boolean {
+    // Simple glob: support * and ** wildcards
+    const escaped = pattern
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*\*/g, "§DOUBLE§")
+      .replace(/\*/g, "[^/]*")
+      .replace(/§DOUBLE§/g, ".*");
+    const re = new RegExp(escaped);
+    return (fp) => re.test(fp);
+  }
+
   upsertFileResult(result: FileParseResult): void {
     const filePath = normalizePath(result.filePath);
     this.removeFileData(filePath, false);
 
     this.fileHashes.set(filePath, result.hash);
+
+    if (result.unresolvedImports && result.unresolvedImports.length > 0) {
+      this.unresolvedImportsByFile.set(filePath, result.unresolvedImports);
+    } else {
+      this.unresolvedImportsByFile.delete(filePath);
+    }
 
     const fileNodeId = this.fileNodeId(filePath);
     this.upsertNode(fileNodeId, {
@@ -1933,6 +1988,7 @@ export class GraphStore {
     if (removeFileHash) {
       this.fileHashes.delete(normalizedPath);
     }
+    this.unresolvedImportsByFile.delete(normalizedPath);
   }
 
   private upsertSymbolNode(nodeId: string, symbol: SymbolDefinition): void {

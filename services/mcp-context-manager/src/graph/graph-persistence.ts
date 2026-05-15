@@ -123,6 +123,47 @@ export async function loadSnapshot(
 }
 
 /**
+ * Delete any `.tmp.*` sibling files left over from interrupted atomic writes.
+ * Safe to call even if no temp files exist.
+ */
+export async function cleanupTempSnapshots(snapshotPath: string): Promise<void> {
+  const dir = path.dirname(snapshotPath);
+  const base = path.basename(snapshotPath);
+  let entries: string[];
+  try {
+    entries = await fs.readdir(dir);
+  } catch {
+    return; // Directory doesn't exist yet — nothing to clean
+  }
+  const tmpPattern = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.tmp\\.`);
+  for (const entry of entries) {
+    if (tmpPattern.test(entry)) {
+      try {
+        await fs.unlink(path.join(dir, entry));
+        console.error(`[graph-persistence] cleaned up temp file: ${entry}`);
+      } catch {
+        // Ignore — may have been cleaned up by another process
+      }
+    }
+  }
+}
+
+/**
+ * Returns true if the snapshot file's mtime is older than maxAgeDays.
+ * Returns false if the file does not exist or mtime cannot be read.
+ */
+export async function isSnapshotStale(snapshotPath: string, maxAgeDays: number): Promise<boolean> {
+  try {
+    const stat = await fs.stat(snapshotPath);
+    const ageMs = Date.now() - stat.mtimeMs;
+    const ageDays = ageMs / (1000 * 60 * 60 * 24);
+    return ageDays > maxAgeDays;
+  } catch {
+    return false; // No file → not stale (will cold-index)
+  }
+}
+
+/**
  * Create a debounced save function that ensures at most one save
  * per `intervalMs` milliseconds.
  */

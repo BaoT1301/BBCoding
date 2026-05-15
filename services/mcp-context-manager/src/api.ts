@@ -14,8 +14,29 @@ import {
   type QueryErrorResponse,
 } from "./utils/query-guards.js";
 import { resolveGlobPatterns } from "./indexer/incremental-indexer.js";
-import { resolveIgnorePatterns } from "./utils/glob-utils.js";
+import { resolveIgnorePatterns, validateGlob, validateRegex } from "./utils/glob-utils.js";
+import { ToolInputError } from "./utils/tool-input-error.js";
 import { detectLanguage } from "./parsers/common.js";
+
+/** Returns a standardised 400 error response for bad tool inputs. */
+function toolInputErrorResponse(err: ToolInputError): ApiResponse {
+  return {
+    statusCode: 400,
+    headers: {},
+    body: { error: err.message, code: "INVALID_PARAMS", retryable: false },
+  };
+}
+
+/**
+ * Returns a human-readable reason string when a tool returns zero results
+ * because no files matched the supplied pattern.
+ */
+function zeroFilesReason(pattern: string, paramName: "file_pattern" | "file_path"): string {
+  return (
+    `no files matched the \`${paramName}\` glob "${pattern}" — ` +
+    `check the pattern is relative to the workspace root and uses correct brace-expansion syntax (e.g. "*.{ts,tsx}").`
+  );
+}
 
 /**
  * Strip the WORKSPACE_ROOT prefix from an absolute file path to produce
@@ -82,6 +103,7 @@ export class HttpApiServer {
   private indexingState: { complete: boolean; indexedFiles?: number } = { complete: false };
   private workspaceRoot: string = "";
   private degradedState: { degraded: boolean; reasons: string[] } = { degraded: false, reasons: [] };
+  private ready: boolean = false;
 
   /** Default timeout for query endpoints (ms). */
   private static readonly DEFAULT_TIMEOUT_MS = 5000;
@@ -198,6 +220,14 @@ export class HttpApiServer {
       };
     }
 
+    // Readiness probe — 200 when graph is ready, 503 while indexing
+    if (pathname === "/api/ready" && req.method === "GET") {
+      if (this.ready) {
+        return { statusCode: 200, headers: {}, body: { ready: true } };
+      }
+      return { statusCode: 503, headers: {}, body: { ready: false, reason: "indexing" } };
+    }
+
     // Parse body for POST requests
     let body: any = null;
     if (req.method === "POST") {
@@ -224,7 +254,7 @@ export class HttpApiServer {
 
     // Diagnostics endpoint
     if (pathname === "/api/v1/diag" && req.method === "GET") {
-      return this.handleDiag();
+      return await this.handleDiag();
     }
 
     // Route handling — all under /api/v1/mcp/*
@@ -375,6 +405,11 @@ export class HttpApiServer {
       return this.handleGetChangeRiskPost(body);
     }
 
+    // --- get_unresolved_imports endpoint ---
+    if (pathname === "/api/v1/mcp/unresolved_imports" && req.method === "GET") {
+      return this.handleGetUnresolvedImports(url.searchParams);
+    }
+
     return {
       statusCode: 404,
       headers: {},
@@ -382,7 +417,7 @@ export class HttpApiServer {
     };
   }
 
-  private handleDiag(): ApiResponse {
+  private async handleDiag(): Promise<ApiResponse> {
     const { pythonPatterns, tsPatterns } = resolveGlobPatterns();
     const resolvedIgnores = resolveIgnorePatterns();
     const filePaths = this.graphStore.getIndexedFilePaths();
@@ -404,6 +439,44 @@ export class HttpApiServer {
       }
     }
 
+    // Import resolution summary
+    const importSummary = this.graphStore.getUnresolvedSummary();
+    const { resolvedEdges, unresolvedSpecifiers, skippedExternals, topUnresolvedReasons } = importSummary;
+
+    // Degraded: high unresolved ratio (>25% with n>10)
+    const degradedReasons = [...this.degradedState.reasons];
+    const total = resolvedEdges + unresolvedSpecifiers;
+    if (unresolvedSpecifiers > 10 && total > 0 && unresolvedSpecifiers / total > 0.25) {
+      if (!degradedReasons.includes("high-unresolved-import-ratio")) {
+        degradedReasons.push("high-unresolved-import-ratio");
+      }
+    }
+
+    // Memory diagnostics
+    const memUsage = process.memoryUsage();
+    const toMb = (bytes: number) => Math.round(bytes / 1024 / 1024);
+    const rssMb = toMb(memUsage.rss);
+    const heapUsedMb = toMb(memUsage.heapUsed);
+    const heapTotalMb = toMb(memUsage.heapTotal);
+    const externalMb = toMb(memUsage.external);
+    // Effective heap limit: use v8.getHeapStatistics if available, else heapTotal
+    let heapLimitMb = heapTotalMb;
+    try {
+      const v8 = await import("node:v8");
+      const stats = v8.getHeapStatistics();
+      if (stats.heap_size_limit > 0) {
+        heapLimitMb = toMb(stats.heap_size_limit);
+      }
+    } catch {
+      // v8 not available — fall back to heapTotal
+    }
+    const memoryDegraded = heapLimitMb > 0 && heapUsedMb / heapLimitMb > 0.85;
+    if (memoryDegraded && !degradedReasons.includes("high-heap-usage")) {
+      degradedReasons.push("high-heap-usage");
+    }
+
+    const degraded = this.degradedState.degraded || degradedReasons.length > this.degradedState.reasons.length;
+
     return {
       statusCode: 200,
       headers: {},
@@ -414,9 +487,56 @@ export class HttpApiServer {
         resolvedIgnores,
         fileCount: { total: filePaths.length, python, ts },
         clusterHits,
-        degraded: this.degradedState.degraded,
-        reasons: this.degradedState.reasons,
+        importResolution: {
+          resolvedEdges,
+          unresolvedSpecifiers,
+          skippedExternals,
+          topUnresolvedReasons,
+        },
+        memory: {
+          rssMb,
+          heapUsedMb,
+          heapTotalMb,
+          heapLimitMb,
+          external: externalMb,
+          degraded: memoryDegraded,
+        },
+        degraded,
+        reasons: degradedReasons,
       },
+    };
+  }
+
+  private handleGetUnresolvedImports(params: URLSearchParams): ApiResponse {
+    const filePattern = params.get("file_pattern") ?? undefined;
+    const limitParam = params.get("limit");
+    const reasonFilter = params.get("reason") ?? undefined;
+    const limit = limitParam ? Math.min(parseInt(limitParam, 10) || 200, 1000) : 200;
+
+    if (filePattern) {
+      try { validateGlob(filePattern); } catch (e) { return toolInputErrorResponse(e as ToolInputError); }
+    }
+
+    let entries = this.graphStore.getUnresolvedImports(filePattern);
+
+    if (reasonFilter) {
+      entries = entries
+        .map(({ filePath, unresolved }) => ({
+          filePath,
+          unresolved: unresolved.filter((u) => u.reason === reasonFilter),
+        }))
+        .filter(({ unresolved }) => unresolved.length > 0);
+    }
+
+    const totalFiles = entries.length;
+    const totalSpecifiers = entries.reduce((sum, e) => sum + e.unresolved.length, 0);
+    const truncated = entries.length > limit;
+    const sliced = entries.slice(0, limit);
+
+    return {
+      statusCode: 200,
+      headers: {},
+      body: { totalFiles, totalSpecifiers, entries: sliced, truncated },
     };
   }
 
@@ -446,6 +566,16 @@ export class HttpApiServer {
   /** Store the resolved workspace root for the /api/v1/diag endpoint. */
   setWorkspaceRoot(root: string): void {
     this.workspaceRoot = root;
+  }
+
+  /** Set readiness state (false = indexing in progress, true = graph ready). */
+  setReady(flag: boolean): void {
+    this.ready = flag;
+  }
+
+  /** Returns true once the initial graph build has completed. */
+  isReady(): boolean {
+    return this.ready;
   }
 
   /** Update degraded state (called after initial index). */
@@ -591,6 +721,10 @@ export class HttpApiServer {
     const kind = (params.get("kind") || undefined) as "function" | "class" | undefined;
     const maxResults = parseInt(params.get("max_results") || params.get("maxResults") || "100", 10);
 
+    if (filePattern) {
+      try { validateGlob(filePattern); } catch (e) { return toolInputErrorResponse(e as ToolInputError); }
+    }
+
     if (language && language !== "python" && language !== "typescript") {
       return {
         statusCode: 400,
@@ -615,13 +749,22 @@ export class HttpApiServer {
         maxResults,
         signal,
       });
-      return result;
+      const body: any = result;
+      if (filePattern && result.totalScanned === 0) {
+        body.reason = zeroFilesReason(filePattern, "file_pattern");
+      }
+      return body;
     });
   }
 
   private async handleGetDeadCodePost(body: any): Promise<ApiResponse> {
     const language = body.language || undefined;
     const kind = body.kind || undefined;
+    const filePattern: string | undefined = body.file_pattern || body.filePattern || undefined;
+
+    if (filePattern) {
+      try { validateGlob(filePattern); } catch (e) { return toolInputErrorResponse(e as ToolInputError); }
+    }
 
     if (language && language !== "python" && language !== "typescript") {
       return {
@@ -647,7 +790,11 @@ export class HttpApiServer {
         maxResults: body.max_results || body.maxResults || 100,
         signal,
       });
-      return result;
+      const resp: any = result;
+      if (filePattern && result.totalScanned === 0) {
+        resp.reason = zeroFilesReason(filePattern, "file_pattern");
+      }
+      return resp;
     });
   }
 
@@ -656,6 +803,10 @@ export class HttpApiServer {
     const kind = (params.get("kind") || undefined) as "function" | "class" | "variable" | undefined;
     const language = (params.get("language") || undefined) as "python" | "typescript" | undefined;
     const filePattern = params.get("file_pattern") || params.get("filePattern") || undefined;
+
+    if (filePattern) {
+      try { validateGlob(filePattern); } catch (e) { return toolInputErrorResponse(e as ToolInputError); }
+    }
 
     if (language && language !== "python" && language !== "typescript") {
       return {
@@ -688,6 +839,11 @@ export class HttpApiServer {
   private async handleGetHotspotsPost(body: any): Promise<ApiResponse> {
     const language = body.language || undefined;
     const kind = body.kind || undefined;
+    const filePattern: string | undefined = body.file_pattern || body.filePattern || undefined;
+
+    if (filePattern) {
+      try { validateGlob(filePattern); } catch (e) { return toolInputErrorResponse(e as ToolInputError); }
+    }
 
     if (language && language !== "python" && language !== "typescript") {
       return {
@@ -878,6 +1034,13 @@ export class HttpApiServer {
     const useRegex = params.get("use_regex") === "true" || params.get("useRegex") === "true";
     const maxResults = parseInt(params.get("max_results") || params.get("maxResults") || "50", 10);
 
+    if (filePattern) {
+      try { validateGlob(filePattern); } catch (e) { return toolInputErrorResponse(e as ToolInputError); }
+    }
+    if (useRegex) {
+      try { validateRegex(query); } catch (e) { return toolInputErrorResponse(e as ToolInputError); }
+    }
+
     if (language && language !== "python" && language !== "typescript") {
       return {
         statusCode: 400,
@@ -912,6 +1075,15 @@ export class HttpApiServer {
 
     const language = body.language || undefined;
     const kind = body.kind || undefined;
+    const filePattern: string | undefined = body.file_pattern || body.filePattern || undefined;
+    const useRegex: boolean = body.use_regex ?? body.useRegex ?? false;
+
+    if (filePattern) {
+      try { validateGlob(filePattern); } catch (e) { return toolInputErrorResponse(e as ToolInputError); }
+    }
+    if (useRegex) {
+      try { validateRegex(query); } catch (e) { return toolInputErrorResponse(e as ToolInputError); }
+    }
 
     if (language && language !== "python" && language !== "typescript") {
       return {
@@ -926,8 +1098,8 @@ export class HttpApiServer {
         query,
         kind,
         language,
-        filePattern: body.file_pattern || body.filePattern,
-        useRegex: body.use_regex ?? body.useRegex ?? false,
+        filePattern,
+        useRegex,
         maxResults: body.max_results || body.maxResults || 50,
         signal,
       });
@@ -940,6 +1112,10 @@ export class HttpApiServer {
     const language = (params.get("language") || undefined) as "python" | "typescript" | undefined;
     const maxCycles = parseInt(params.get("max_cycles") || params.get("maxCycles") || "50", 10);
     const maxDepth = parseInt(params.get("max_depth") || params.get("maxDepth") || "20", 10);
+
+    if (filePattern) {
+      try { validateGlob(filePattern); } catch (e) { return toolInputErrorResponse(e as ToolInputError); }
+    }
 
     if (language && language !== "python" && language !== "typescript") {
       return {
@@ -957,12 +1133,21 @@ export class HttpApiServer {
         maxDepth,
         signal,
       });
-      return result;
+      const resp: any = result;
+      if (filePattern && result.totalFilesScanned === 0) {
+        resp.reason = zeroFilesReason(filePattern, "file_pattern");
+      }
+      return resp;
     });
   }
 
   private async handleGetCircularDepsPost(body: any): Promise<ApiResponse> {
     const language = body.language || undefined;
+    const filePattern: string | undefined = body.file_pattern || body.filePattern || undefined;
+
+    if (filePattern) {
+      try { validateGlob(filePattern); } catch (e) { return toolInputErrorResponse(e as ToolInputError); }
+    }
 
     if (language && language !== "python" && language !== "typescript") {
       return {
@@ -974,7 +1159,7 @@ export class HttpApiServer {
 
     return this.executeQuery(async (signal) => {
       const result = this.graphStore.getCircularDependencies({
-        filePattern: body.file_pattern || body.filePattern,
+        filePattern,
         language,
         maxCycles: body.max_cycles || body.maxCycles || 50,
         maxDepth: body.max_depth || body.maxDepth || 20,
@@ -990,6 +1175,10 @@ export class HttpApiServer {
     const language = (params.get("language") || undefined) as "python" | "typescript" | undefined;
     const sortBy = (params.get("sort_by") || params.get("sortBy") || "total") as "fan_in" | "fan_out" | "depth" | "total";
     const maxResults = parseInt(params.get("max_results") || params.get("maxResults") || "100", 10);
+
+    if (filePath) {
+      try { validateGlob(filePath); } catch (e) { return toolInputErrorResponse(e as ToolInputError); }
+    }
 
     if (language && language !== "python" && language !== "typescript") {
       return {
@@ -1025,7 +1214,7 @@ export class HttpApiServer {
         signal,
       });
       // Apply transformNode to each metric's node for frontend compatibility
-      return {
+      const resp: any = {
         metrics: result.metrics.map((m) => ({
           node: transformNode(m.node),
           fanIn: m.fanIn,
@@ -1036,6 +1225,10 @@ export class HttpApiServer {
         totalScanned: result.totalScanned,
         truncated: result.truncated,
       };
+      if (filePath && result.totalScanned === 0) {
+        resp.reason = zeroFilesReason(filePath, "file_path");
+      }
+      return resp;
     });
   }
 
@@ -1043,6 +1236,7 @@ export class HttpApiServer {
     const language = body.language || undefined;
     const kind = body.kind || undefined;
     const sortBy = body.sort_by || body.sortBy || "total";
+    const filePath: string | undefined = body.file_path || body.filePath || undefined;
 
     if (language && language !== "python" && language !== "typescript") {
       return {
@@ -1070,7 +1264,7 @@ export class HttpApiServer {
 
     return this.executeQuery(async (signal) => {
       const result = this.graphStore.getComplexityMetrics({
-        filePath: body.file_path || body.filePath,
+        filePath,
         kind,
         language,
         sortBy,

@@ -1,3 +1,43 @@
+import { ToolInputError } from "./tool-input-error.js";
+
+/**
+ * Validates a glob pattern, throwing ToolInputError for common authoring mistakes.
+ * - Rejects comma-separated globs without brace-expansion (e.g. "*.ts,*.tsx")
+ * - Rejects absolute paths
+ */
+export function validateGlob(glob: string): void {
+  if (glob.includes(",") && !glob.includes("{")) {
+    throw new ToolInputError(
+      `Comma in glob without brace-expansion: "${glob}". ` +
+        `Use "{ext1,ext2}" instead, e.g. "*.{ts,tsx}".`,
+    );
+  }
+  if (glob.startsWith("/") || /^[A-Za-z]:[/\\]/.test(glob)) {
+    throw new ToolInputError(
+      `Absolute paths are not valid globs: "${glob}". ` +
+        `Use a pattern relative to the workspace, e.g. "src/**/*.ts".`,
+    );
+  }
+}
+
+/**
+ * Compiles a regex pattern, throwing ToolInputError with actionable hints on failure.
+ */
+export function validateRegex(pattern: string): RegExp {
+  try {
+    return new RegExp(pattern);
+  } catch (err) {
+    const msg = (err as Error).message;
+    let hint = "";
+    if (/character class/i.test(msg)) {
+      hint = " Hint: escape '[' as '\\[', or use ['\"] to match both quote characters.";
+    } else if (/unterminated group/i.test(msg)) {
+      hint = " Hint: count your parentheses — one '(' per ')'.";
+    }
+    throw new ToolInputError(`Invalid regex: ${msg}${hint}\nPattern: ${pattern}`);
+  }
+}
+
 /**
  * Splits a comma-separated glob string while preserving brace expansions.
  * e.g. "app/**\/*.{ts,tsx},lib/**\/*.ts" → ["app/**\/*.{ts,tsx}", "lib/**\/*.ts"]

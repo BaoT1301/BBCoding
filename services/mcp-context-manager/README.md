@@ -33,9 +33,9 @@ A standalone [Model Context Protocol](https://modelcontextprotocol.io/) server t
 # 1. Start MCP services (Docker)
 ./mcp.sh up
 
-# 2. Verify health
-curl http://localhost:3001/api/health
-# → {"status":"ok"}
+# 2. Verify readiness (returns 200 once graph is built)
+curl http://localhost:3001/api/ready
+# → {"ready":true}
 
 # 3. Configure your AI tool (see docs/SETUP.md for details)
 #    Kiro: .kiro/settings/mcp.json already configured
@@ -65,6 +65,7 @@ For detailed setup instructions, see [`docs/SETUP.md`](docs/SETUP.md).
 | 13 | `get_circular_dependencies` | Detect import cycles |
 | 14 | `get_complexity_metrics` | Complexity scoring for functions/classes |
 | 15 | `get_change_risk` | Risk assessment for a set of changed files |
+| 16 | `get_unresolved_imports` | Files with unresolved import specifiers (via `/api/v1/mcp/unresolved_imports`) |
 
 ---
 
@@ -98,7 +99,7 @@ npm run dev
 # Build TypeScript
 npm run build
 
-# Run tests (296 tests across 31 files)
+# Run tests (438 tests across 45 files)
 npm run test
 
 # Lint
@@ -135,6 +136,55 @@ src/
 - **Incremental updates** — only re-parses changed files + dependents
 - **Graph snapshots** — persists to disk for sub-second restarts
 - **`--stdio-only` mode** — skips HTTP server when invoked by AI tools via `docker exec`
+
+---
+
+## Import Resolution
+
+### TypeScript Path Aliases
+
+The indexer automatically discovers all `tsconfig*.json` files under the workspace root
+(honouring `WATCH_IGNORES`) and resolves `compilerOptions.paths` aliases at index time.
+
+- Nearest-ancestor config wins (deepest directory match).
+- `extends` chains are followed with a cycle guard.
+- JSONC (comments + trailing commas) is supported without extra dependencies.
+- Set `TS_LEGACY_FRONTEND_ALIAS=1` to re-enable the old `@/* → frontend/src/*` hardcode
+  for one-release backwards compatibility (default: off).
+
+---
+
+## Input Validation
+
+All tools that accept `file_pattern` (glob) or `pattern` (regex) parameters perform pre-flight validation:
+
+- Comma-separated globs (`*.ts,*.tsx`) are rejected — use brace-expansion: `*.{ts,tsx}`
+- Absolute paths are rejected — use workspace-relative paths: `src/**/*.ts`
+- Invalid regex patterns return a `400 INVALID_PARAMS` response with an actionable hint
+- When a tool returns zero results because no files matched the glob, the response includes a `reason` field
+
+---
+
+## Diagnostics
+
+### `GET /api/ready`
+
+Readiness probe. Returns `200 { "ready": true }` once the initial graph build completes;
+`503 { "ready": false, "reason": "indexing" }` while indexing. Use for Docker healthchecks
+and `mcp.sh up` polling. `/api/health` remains available as a liveness alias (always 200).
+
+### `GET /api/v1/diag`
+
+Full diagnostics snapshot. Includes `importResolution` and `memory` blocks in addition to
+the base fields. `degraded: true` when any of:
+- `fileCount.total === 0` → `"indexed 0 files"`
+- `unresolvedSpecifiers > 10` AND ratio > 25% → `"high-unresolved-import-ratio"`
+- `heapUsedMb / heapLimitMb > 0.85` → `"high-heap-usage"`
+
+### `GET /api/v1/mcp/unresolved_imports`
+
+Returns files with unresolved import specifiers. Optional query params: `file_pattern`, `limit` (default 200), `reason`.
+Response: `{ totalFiles, totalSpecifiers, entries, truncated }`.
 
 ---
 

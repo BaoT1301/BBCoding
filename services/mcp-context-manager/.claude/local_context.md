@@ -31,7 +31,7 @@ The **MCP Context Manager** is an isolated internal developer tool that provides
 
 **File Watching**:
 - **chokidar** (^4.0.3): Cross-platform file system watcher
-- Monitors paths derived from `PYTHON_WATCH_GLOBS` and `TS_WATCH_GLOBS` env vars (defaults: `backend/`, `frontend/src/`, `services/`)
+- Monitors paths derived from `PYTHON_WATCH_GLOBS` and `TS_WATCH_GLOBS` env vars (default: `.` — workspace root)
 - Also watches `cluster-config.json` for hot-reload
 - Debounced updates (200ms per file, 500ms batch flush)
 
@@ -379,11 +379,12 @@ interface GraphEdge {
 
 **Python**:
 - Converts `app.main` → `backend/app/main.py` or `backend/app/main/__init__.py`
-- Searches: `{workspace_root}/{module_path}.py`, `{workspace_root}/backend/{module_path}.py`
+- Searches: `{workspace_root}/{module_path}.py`, `{workspace_root}/{module_path}/__init__.py`
 
 **TypeScript**:
 - Resolves relative imports: `./utils` → `frontend/src/utils.ts` or `frontend/src/utils/index.ts`
-- Resolves alias imports: `@/components` → `frontend/src/components`
+- Resolves alias imports via nearest-ancestor `tsconfig*.json` `compilerOptions.paths`.
+  Falls back to `TS_LEGACY_FRONTEND_ALIAS=1` env var for the old `@/* → frontend/src/*` hardcode.
 - Tries extensions: `.ts`, `.tsx`, `.js`, `.jsx`, `.d.ts`
 
 ---
@@ -397,7 +398,8 @@ interface GraphEdge {
 
 ### Memory
 - **Typical Usage**: 100-250 MB (increases with full graph export after limit removal)
-- **Docker Limit**: 512 MB
+- **Docker Limit**: 1536 MB (cgroup); V8 heap capped at 1024 MB via `NODE_OPTIONS=--max-old-space-size=1024`
+- **Degraded threshold**: heap > 85% of heap limit → `"high-heap-usage"` in `/api/v1/diag`
 - **Graph Size**: ~1-2 MB per 100 files
 
 ### Update Latency
@@ -418,7 +420,7 @@ interface GraphEdge {
 
 ### Required
 - **`WORKSPACE_ROOT`**: Absolute path to repository root (e.g., `/workspace`)
-  - Default: Auto-detected by walking up from `cwd` to find `backend/` and `frontend/`
+  - Default: `process.cwd()` if unset
   - Docker: Set to `/workspace` in docker-compose.yml
 
 ### Optional
@@ -433,6 +435,10 @@ interface GraphEdge {
 - **`WATCH_IGNORES`**: Comma-separated glob patterns to exclude from indexing and watching.
   - Default: 14-entry list (node_modules, dist, build, .next, .turbo, coverage, .git, .venv, venv, __pycache__, .tools/mcp-context-*, services/mcp-context-*, .kiro, .claude)
   - Example: `WATCH_IGNORES=custom/**,other/**`
+- **`TS_LEGACY_FRONTEND_ALIAS`**: Set to `1` to re-enable the legacy `@/* → frontend/src/*`
+  alias hardcode. Default: off. Intended for one-release migration window only.
+- **`GRAPH_SNAPSHOT_MAX_AGE`**: Max snapshot age in days before forced re-index. Default: `7`.
+- **`NODE_OPTIONS`**: Set to `--max-old-space-size=1024` in Dockerfile and compose. Controls V8 heap limit.
 
 ---
 
@@ -473,14 +479,15 @@ mcp-context-manager:
     - ./services:/workspace/services:ro
     - ./services/mcp-context-manager/cluster-config.json:/workspace/cluster-config.json:ro
   healthcheck:
-    test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost:3001/api/health"]
-    interval: 30s
+    test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost:3001/api/ready"]
+    interval: 5s
     timeout: 5s
-    retries: 3
+    retries: 12
+    start_period: 60s
   deploy:
     resources:
       limits:
-        memory: 512M
+        memory: 1536M
   networks:
     - mcp-network
 ```
@@ -574,7 +581,7 @@ docker exec -i mcp-context-manager node /app/dist/server.js --stdio-only
 ## Testing Strategy
 
 ### Current State
-- **Unit Tests**: Vitest (356 tests across 37 test files)
+- **Unit Tests**: Vitest (438 tests across 45 test files)
 - **Test Files**:
   - `src/__tests__/geographic-mapper.test.ts` (10 tests)
   - `src/__tests__/cluster-config-loader.test.ts` (15 tests)
@@ -628,8 +635,9 @@ docker exec -i mcp-context-manager node /app/dist/server.js --stdio-only
 ## Monitoring & Observability
 
 ### Health Checks
-- **Docker**: `wget -qO /dev/null http://localhost:3001/api/health` every 30s
-- **HTTP**: `GET /api/health` returns `{ status: "ok" }`
+- **Docker**: `wget -qO /dev/null http://localhost:3001/api/ready` every 5s (interval), 12 retries, 60s start_period
+- **Liveness**: `GET /api/health` always returns `{ status: "ok" }` (HTTP 200)
+- **Readiness**: `GET /api/ready` returns `{ ready: true }` (200) once graph is built; `{ ready: false, reason: "indexing" }` (503) while indexing
 
 ### Logs
 - **Format**: `[component] message`
@@ -783,7 +791,7 @@ For issues or questions about the MCP Context Manager:
 
 ## Document Maintenance
 
-**Last Updated**: 2026-05-05 (MCP Documentation Portal — Sprint 4 state sync)
+**Last Updated**: 2026-05-14 (Sprint 5 — MCP Template Bugfix state sync)
 **Maintained By**: Knowledge Manager
 **Review Frequency**: After major changes to MCP service
 **Related Documents**:

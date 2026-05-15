@@ -94,6 +94,22 @@ case "$1" in
     echo "→ Starting MCP services …"
     # shellcheck disable=SC2086
     docker compose -f "$COMPOSE_FILE" $ENV_FLAG up -d "${@:2}"
+    # Poll /api/ready for up to 90s to give user feedback
+    echo "→ Waiting for graph indexing to complete …"
+    elapsed=0
+    while [ $elapsed -lt 90 ]; do
+      READY=$(curl -sf http://localhost:3001/api/ready 2>/dev/null | grep -o '"ready":true' || true)
+      if [[ -n "$READY" ]]; then
+        FILES=$(curl -sf http://localhost:3001/api/v1/diag 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('fileCount',{}).get('total',0))" 2>/dev/null || echo "?")
+        echo "  ✓ Graph ready — $FILES files indexed"
+        break
+      fi
+      sleep 2
+      elapsed=$((elapsed + 2))
+    done
+    if [[ $elapsed -ge 90 ]]; then
+      echo "  ⚠ Indexing still in progress. Run './mcp.sh doctor' to check status."
+    fi
     ;;
   down)
     echo "→ Stopping MCP services …"
@@ -144,7 +160,17 @@ case "$1" in
       exit 2
     fi
 
-    # 2. Fetch /api/v1/diag.
+    # 2. Check readiness before diag.
+    READY_JSON=$(curl -sf "http://localhost:3001/api/ready" 2>/dev/null) || true
+    if [[ -n "$READY_JSON" ]]; then
+      READY=$(echo "$READY_JSON" | grep -o '"ready":true' || true)
+      if [[ -z "$READY" ]]; then
+        echo "⚠ Service is still indexing — graph not yet ready"
+        echo "  Wait a moment and retry, or check: ./mcp.sh logs mcp-context-manager"
+      fi
+    fi
+
+    # 3. Fetch /api/v1/diag.
     DIAG_URL="http://localhost:3001/api/v1/diag"
     DIAG_JSON=$(curl -sf "$DIAG_URL" 2>/dev/null) || {
       echo "✗ Could not reach $DIAG_URL"
@@ -152,7 +178,7 @@ case "$1" in
       exit 3
     }
 
-    # 3. Pretty-print: prefer jq, fall back to python3, fall back to raw.
+    # 4. Pretty-print: prefer jq, fall back to python3, fall back to raw.
     echo "── MCP Doctor ──────────────────────────────"
     if command -v jq &>/dev/null; then
       echo "$DIAG_JSON" | jq .
@@ -163,7 +189,7 @@ case "$1" in
     fi
     echo "────────────────────────────────────────────"
 
-    # 4. Exit non-zero when degraded or no files indexed.
+    # 5. Exit non-zero when degraded or no files indexed.
     DEGRADED=$(echo "$DIAG_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print('1' if d.get('degraded') or d.get('fileCount',{}).get('total',0)==0 else '0')" 2>/dev/null || echo "0")
     if [[ "$DEGRADED" == "1" ]]; then
       echo "✗ MCP is degraded — see 'reasons' above"

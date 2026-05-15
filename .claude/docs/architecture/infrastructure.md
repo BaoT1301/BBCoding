@@ -114,6 +114,27 @@ All operations go through `./mcp.sh`:
 
 `env_file: .env.mcp` (required: false) is declared before the explicit `environment:` block. Compose merge order ensures `WORKSPACE_ROOT` and `HTTP_PORT` from the explicit block always win over values in the env file.
 
+**Healthcheck (Sprint 5):**
+
+```yaml
+healthcheck:
+  test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost:3001/api/ready"]
+  interval: 5s
+  timeout: 5s
+  retries: 12
+  start_period: 60s
+```
+
+`/api/ready` returns 503 while indexing and 200 once the graph is built. `/api/health` remains available as a liveness alias (always 200).
+
+**Memory sizing (Sprint 5):**
+
+| Setting | Value | Notes |
+|---------|-------|-------|
+| `deploy.resources.limits.memory` | `1536M` | cgroup hard limit |
+| `NODE_OPTIONS` | `--max-old-space-size=1024` | V8 old-space cap |
+| Degraded threshold | heap > 85% of limit | `"high-heap-usage"` in `/api/v1/diag` |
+
 For a production-style deploy (build → health-check → restart):
 
 ```bash
@@ -169,8 +190,10 @@ Restart the Context Manager to force a re-index:
 ./mcp.sh restart
 ```
 If the problem persists, check memory limits — the container is capped at
-512 MB. Large workspaces may require raising `deploy.resources.limits.memory`
-in `docker-compose.mcp.yml`.
+1536 MB by default. Large workspaces may require raising `deploy.resources.limits.memory`
+in `docker-compose.mcp.yml` (also update `NODE_OPTIONS=--max-old-space-size` accordingly).
+The service degrades (`"high-heap-usage"` in `/api/v1/diag`) when heap usage exceeds 85%
+of the V8 heap limit.
 
 **5. AI tool can't find the MCP server**
 Confirm the container is healthy (`./mcp.sh status`) and that the config file

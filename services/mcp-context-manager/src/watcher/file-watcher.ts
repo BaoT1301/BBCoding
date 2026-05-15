@@ -7,7 +7,7 @@ import { IncrementalIndexer } from "../indexer/incremental-indexer.js";
 import type { GraphStore } from "../graph/graph-store.js";
 import { splitCsvRespectingBraces, resolveIgnorePatterns } from "../utils/glob-utils.js";
 
-const DEFAULT_WATCH_DIRS = ["backend", "frontend/src", "services"];
+const DEFAULT_WATCH_DIRS = ["."];
 
 export function resolveWatchPaths(workspaceRoot: string): string[] {
   const pythonEnv = process.env.PYTHON_WATCH_GLOBS;

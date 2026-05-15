@@ -43,6 +43,19 @@ export interface ParsedImport {
   isRelative: boolean;
 }
 
+export type ImportResolution =
+  | { kind: "resolved"; filePath: string }
+  | { kind: "skipped-external"; specifier: string }
+  | { kind: "unresolved-relative"; specifier: string; searched: string[] }
+  | { kind: "unresolved-alias"; specifier: string; tsconfig: string | null; searched: string[] }
+  | { kind: "unresolved-unknown"; specifier: string };
+
+export interface UnresolvedImportEntry {
+  specifier: string;
+  reason: "missing-file" | "alias-no-match" | "alias-no-tsconfig" | "other";
+  searched?: string[];
+}
+
 export interface FileParseResult {
   filePath: string;
   language: Language;
@@ -52,6 +65,7 @@ export interface FileParseResult {
   parsedImports: ParsedImport[];
   resolvedImports: string[];
   parseErrors: string[];
+  unresolvedImports?: UnresolvedImportEntry[];
 }
 
 export interface GraphNode {

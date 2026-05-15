@@ -7,8 +7,9 @@ import { GraphStore } from "../graph/graph-store.js";
 import { parsePythonFile } from "../parsers/python-parser.js";
 import { parseTypeScriptFile } from "../parsers/typescript-parser.js";
 import { detectLanguage } from "../parsers/common.js";
-import type { FileParseResult } from "../types/schema.js";
+import type { FileParseResult, ImportResolution, UnresolvedImportEntry } from "../types/schema.js";
 import { splitCsvRespectingBraces, resolveIgnorePatterns } from "../utils/glob-utils.js";
+import { TsconfigResolver } from "./tsconfig-resolver.js";
 
 export { splitCsvRespectingBraces, resolveIgnorePatterns };
 
@@ -40,12 +41,16 @@ export class IncrementalIndexer {
 
   private readonly fileExistsCache = new Map<string, boolean>();
 
+  readonly tsconfigResolver: TsconfigResolver;
+
   constructor(workspaceRoot: string, graphStore: GraphStore) {
     this.workspaceRoot = normalize(workspaceRoot);
     this.graphStore = graphStore;
+    this.tsconfigResolver = new TsconfigResolver(this.workspaceRoot);
   }
 
   async buildInitialGraph(onProgress?: (current: number, total: number) => void): Promise<{ indexedFiles: number }> {
+    await this.tsconfigResolver.discover();
     const { pythonPatterns, tsPatterns } = resolveGlobPatterns();
     const files = await fg([...pythonPatterns, ...tsPatterns], {
       cwd: this.workspaceRoot,
@@ -61,6 +66,21 @@ export class IncrementalIndexer {
         count += 1;
       }
       onProgress?.(count, files.length);
+    }
+
+    // Structured log: import resolution summary
+    const summary = this.graphStore.getUnresolvedSummary();
+    const { resolvedEdges, unresolvedSpecifiers, skippedExternals, topUnresolvedReasons } = summary;
+    console.error(
+      `[live-context-manager] import resolution: ${resolvedEdges} resolved, ${unresolvedSpecifiers} unresolved, ${skippedExternals} externals skipped`,
+    );
+    if (unresolvedSpecifiers > 0) {
+      const reasonStr = Object.entries(topUnresolvedReasons)
+        .map(([k, v]) => `${v} ${k}`)
+        .join(", ");
+      console.error(
+        `[live-context-manager] ⚠ ${unresolvedSpecifiers} unresolved imports (${reasonStr}) — run GET /api/v1/mcp/unresolved_imports for details`,
+      );
     }
 
     return { indexedFiles: count };
@@ -175,17 +195,20 @@ export class IncrementalIndexer {
       return false;
     }
 
-    parseResult.resolvedImports = await this.resolveImports(normalized, parseResult.parsedImports.map((item) => item.raw), language);
+    const { resolved, unresolved } = await this.resolveImportsTagged(normalized, parseResult.parsedImports.map((item) => item.raw), language);
+    parseResult.resolvedImports = resolved;
+    parseResult.unresolvedImports = unresolved;
     this.graphStore.upsertFileResult(parseResult);
     return true;
   }
 
-  private async resolveImports(
+  private async resolveImportsTagged(
     currentFile: string,
     imports: string[],
     language: "python" | "typescript",
-  ): Promise<string[]> {
+  ): Promise<{ resolved: string[]; unresolved: UnresolvedImportEntry[] }> {
     const resolved = new Set<string>();
+    const unresolved: UnresolvedImportEntry[] = [];
 
     for (const importValue of imports) {
       if (language === "python") {
@@ -193,15 +216,41 @@ export class IncrementalIndexer {
         if (pythonResolved) {
           resolved.add(pythonResolved);
         }
+        // Python unresolved tracking is out of scope for FIX-02 (TS-focused)
       } else {
-        const tsResolved = await this.resolveTypeScriptImport(currentFile, importValue);
-        if (tsResolved) {
-          resolved.add(tsResolved);
+        const resolution = await this.resolveTypeScriptImportTagged(currentFile, importValue);
+        if (resolution.kind === "resolved") {
+          resolved.add(resolution.filePath);
+        } else if (resolution.kind !== "skipped-external") {
+          // Map tagged kind to reason
+          let reason: UnresolvedImportEntry["reason"];
+          if (resolution.kind === "unresolved-relative") {
+            reason = "missing-file";
+          } else if (resolution.kind === "unresolved-alias") {
+            reason = resolution.tsconfig ? "alias-no-match" : "alias-no-tsconfig";
+          } else {
+            reason = "other";
+          }
+          const entry: UnresolvedImportEntry = { specifier: importValue, reason };
+          if ("searched" in resolution && resolution.searched.length > 0) {
+            entry.searched = resolution.searched;
+          }
+          unresolved.push(entry);
         }
       }
     }
 
-    return [...resolved];
+    return { resolved: [...resolved], unresolved };
+  }
+
+  /** @deprecated Use resolveImportsTagged instead. Kept for backwards compat. */
+  private async resolveImports(
+    currentFile: string,
+    imports: string[],
+    language: "python" | "typescript",
+  ): Promise<string[]> {
+    const { resolved } = await this.resolveImportsTagged(currentFile, imports, language);
+    return resolved;
   }
 
   private async resolvePythonModule(moduleName: string): Promise<string | null> {
@@ -213,8 +262,6 @@ export class IncrementalIndexer {
     const candidates = [
       path.join(this.workspaceRoot, `${modulePath}.py`),
       path.join(this.workspaceRoot, modulePath, "__init__.py"),
-      path.join(this.workspaceRoot, "backend", `${modulePath}.py`),
-      path.join(this.workspaceRoot, "backend", modulePath, "__init__.py"),
     ].map((item) => normalize(item));
 
     for (const candidate of candidates) {
@@ -227,35 +274,70 @@ export class IncrementalIndexer {
   }
 
   private async resolveTypeScriptImport(currentFile: string, importValue: string): Promise<string | null> {
+    const resolution = await this.resolveTypeScriptImportTagged(currentFile, importValue);
+    return resolution.kind === "resolved" ? resolution.filePath : null;
+  }
+
+  private async resolveTypeScriptImportTagged(currentFile: string, importValue: string): Promise<ImportResolution> {
     if (!importValue) {
-      return null;
+      return { kind: "skipped-external", specifier: importValue };
     }
 
-    if (!importValue.startsWith(".") && !importValue.startsWith("@/")) {
-      return null;
+    // Relative imports — resolve against current file's directory
+    if (importValue.startsWith(".")) {
+      const basePath = path.resolve(path.dirname(currentFile), importValue);
+      const candidates = this.buildCandidates(basePath);
+      const found = await this.resolveCandidate(basePath);
+      if (found) return { kind: "resolved", filePath: found };
+      return { kind: "unresolved-relative", specifier: importValue, searched: candidates };
     }
 
-    let basePath: string;
-    if (importValue.startsWith("@/")) {
-      basePath = path.join(this.workspaceRoot, "frontend", "src", importValue.slice(2));
-    } else {
-      basePath = path.resolve(path.dirname(currentFile), importValue);
+    // Bare specifiers (e.g. "react", "zod", "node:fs") — skip
+    if (!/^[@~]/.test(importValue) && !importValue.startsWith("/")) {
+      return { kind: "skipped-external", specifier: importValue };
     }
 
-    const candidates: string[] = [normalize(basePath)];
-    for (const ext of TS_IMPORT_EXTENSIONS) {
-      candidates.push(`${normalize(basePath)}${ext}`);
-    }
-    for (const ext of TS_IMPORT_EXTENSIONS) {
-      candidates.push(normalize(path.join(basePath, `index${ext}`)));
+    // Legacy env-var fallback
+    if (process.env.TS_LEGACY_FRONTEND_ALIAS === "1" && importValue.startsWith("@/")) {
+      const basePath = path.join(this.workspaceRoot, "frontend", "src", importValue.slice(2));
+      const found = await this.resolveCandidate(basePath);
+      if (found) return { kind: "resolved", filePath: found };
+      return { kind: "unresolved-alias", specifier: importValue, tsconfig: null, searched: this.buildCandidates(basePath) };
     }
 
-    for (const candidate of candidates) {
-      if (await this.exists(candidate)) {
-        return candidate;
+    // Alias resolution via nearest-ancestor tsconfig paths
+    const tsconfig = this.tsconfigResolver.findNearestTsconfig(currentFile);
+    if (tsconfig) {
+      const aliasResolved = this.tsconfigResolver.resolveAlias(tsconfig, importValue);
+      if (aliasResolved) {
+        const found = await this.resolveCandidate(aliasResolved);
+        if (found) return { kind: "resolved", filePath: found };
+        return {
+          kind: "unresolved-alias",
+          specifier: importValue,
+          tsconfig: tsconfig.configPath,
+          searched: this.buildCandidates(aliasResolved),
+        };
       }
+      // tsconfig found but no matching alias pattern
+      return { kind: "unresolved-alias", specifier: importValue, tsconfig: tsconfig.configPath, searched: [] };
     }
 
+    // No tsconfig in tree
+    return { kind: "unresolved-alias", specifier: importValue, tsconfig: null, searched: [] };
+  }
+
+  private buildCandidates(basePath: string): string[] {
+    const candidates: string[] = [normalize(basePath)];
+    for (const ext of TS_IMPORT_EXTENSIONS) candidates.push(`${normalize(basePath)}${ext}`);
+    for (const ext of TS_IMPORT_EXTENSIONS) candidates.push(normalize(path.join(basePath, `index${ext}`)));
+    return candidates;
+  }
+
+  private async resolveCandidate(basePath: string): Promise<string | null> {
+    for (const candidate of this.buildCandidates(basePath)) {
+      if (await this.exists(candidate)) return candidate;
+    }
     return null;
   }
 

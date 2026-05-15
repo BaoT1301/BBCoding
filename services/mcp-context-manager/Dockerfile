@@ -39,6 +39,9 @@ COPY --from=builder /app/dist ./dist
 # Expose MCP server port (if applicable)
 EXPOSE 3001
 
+# Set V8 heap limit — paired with 1536M cgroup limit (heap ≈ 2/3 of cgroup)
+ENV NODE_OPTIONS="--max-old-space-size=1024"
+
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -qO /dev/null http://localhost:3001/api/health || exit 1

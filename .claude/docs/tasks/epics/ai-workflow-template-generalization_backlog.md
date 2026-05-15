@@ -18,6 +18,8 @@
 
 **Sprint 4 Bug-Fix (2026-05-08):** UI health status regression fixed — `SetupPage.tsx` false-negative where `degraded` status was mapped to `unhealthy`. Added `"degraded"` to `HealthStatus` union, yellow warning badge, wizard visibility confirmed, static copy updated in `AgentsPage.tsx` and `openapi-parser.ts`, 3-case test suite added (301/28 green). ✅ COMPLETE
 
+**Sprint 5 Bug-Fix (2026-05-14):** MCP template bugfixes ported from sibling repo — tsconfig-aware alias resolver (FIX-01), unresolved import diagnostics + `/api/v1/mcp/unresolved_imports` endpoint (FIX-02), layout-agnostic defaults (FIX-03), tool input validation with actionable hints (FIX-04), readiness probe + memory hardening + snapshot lifecycle (FIX-05a+b), UX polish + doc updates (Track 6). 438/440 tests passing (2 pre-existing). ✅ COMPLETE
+
 **Sprint 1 scope adjustment (2026-05-07):** Foundation audit was split into two tracks (mechanical fixes; global rule elevation) to reduce fsWrite payload risk. To keep within `MAX_TOTAL_TRACKS = 8`, the `setup.sh` interactive initializer was deferred to Sprint 2. Sprint 1's README documents the **manual** adoption path; Sprint 2 will add the script and update the README's Quick Start accordingly.
 
 ---
@@ -29,7 +31,7 @@
 - [x] Dry-run: fresh clone → follow root `README.md` steps → MCP services up and indexing user-provided files *(Sprint 3 Bug-Fix)*
 - [x] Re-run `services/mcp-context-manager` vitest suite after indexer env-var changes *(Sprint 3 Bug-Fix — 356/37 green)*
 - [ ] Verify AI tool integration: point Kiro / Cursor / Claude Desktop at the template output, confirm MCP tools resolve
-- [ ] Confirm `setup.sh` is idempotent (running twice produces the same config)
+- [x] Confirm `setup.sh` is idempotent (running twice produces the same config) *(Sprint 5 — layout-agnostic defaults verified)*
 
 ---
 

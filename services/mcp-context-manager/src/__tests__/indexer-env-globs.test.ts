@@ -148,7 +148,7 @@ describe("resolveWatchPaths", () => {
 
   it("returns default watch dirs when no env vars set", () => {
     const paths = resolveWatchPaths("/workspace");
-    expect(paths).toEqual(["/workspace/backend", "/workspace/frontend/src", "/workspace/services"]);
+    expect(paths).toEqual(["/workspace"]);
   });
 
   it("extracts top-level dir from PYTHON_WATCH_GLOBS", () => {

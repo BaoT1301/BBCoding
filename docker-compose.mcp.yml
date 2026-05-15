@@ -28,6 +28,7 @@ services:
     environment:
       - WORKSPACE_ROOT=/project
       - HTTP_PORT=3001
+      - NODE_OPTIONS=--max-old-space-size=1024
     volumes:
       # ── Workspace mount ──────────────────────────────────────────────
       # The entire workspace is mounted at /project.
@@ -38,14 +39,14 @@ services:
       - ${WORKSPACE_PATH:-.}:/project:ro
       # The cluster-config is mounted separately at the workspace root so
       # the indexer can find it at /project/cluster-config.json.
-      # NOTE (Sprint-3): When WORKSPACE_PATH=. (default, repo-root layout) this
-      # overlay is redundant because cluster-config.json is already present in
-      # the workspace volume above. It is kept here so that nested-template
-      # layouts (e.g. collab-guard, where WORKSPACE_PATH=../.. points above the
-      # template dir) still get the config injected correctly. See Sprint-3
-      # issues.md entry on the :ro overlay for the follow-up to make this
-      # conditional.
-      - ./services/mcp-context-manager/cluster-config.json:/project/cluster-config.json:ro
+      # Optional: mount a custom cluster-config.json at the workspace root.
+      # By default this is commented out — the indexer uses whatever
+      # cluster-config.json exists in the workspace volume above (or falls
+      # back to a single "Workspace" cluster if none is present).
+      # Users with nested-template layouts (WORKSPACE_PATH=../.. etc.) can
+      # uncomment the line below, or place their own cluster-config.json at
+      # their workspace root.
+      # - ./services/mcp-context-manager/cluster-config.json:/project/cluster-config.json:ro
     ports:
       - "3001:3001"
     networks:
@@ -54,13 +55,13 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 1536M
     healthcheck:
-      test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost:3001/api/health"]
-      interval: 30s
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost:3001/api/ready"]
+      interval: 5s
       timeout: 5s
-      retries: 3
-      start_period: 10s
+      retries: 12
+      start_period: 60s
 
   # ─── MCP Context UI ───────────────────────────────────────────────────
   # Standalone React UI for visualizing MCP context graph

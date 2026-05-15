@@ -4,8 +4,8 @@
 set -e
 
 COMPOSE_FILE="docker-compose.mcp.yml"
-HEALTH_TIMEOUT=30
-HEALTH_URL="http://localhost:3001/api/health"
+HEALTH_TIMEOUT=90
+HEALTH_URL="http://localhost:3001/api/ready"
 MCP_UI_URL="http://localhost:8080"
 
 # ─── Step 1: Banner ─────────────────────────────────────────────────────────────

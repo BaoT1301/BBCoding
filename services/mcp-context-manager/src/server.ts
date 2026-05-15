@@ -1,5 +1,4 @@
 import path from "node:path";
-import fs from "node:fs";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -15,6 +14,8 @@ import {
   saveSnapshot,
   loadSnapshot,
   createDebouncedSave,
+  cleanupTempSnapshots,
+  isSnapshotStale,
 } from "./graph/graph-persistence.js";
 import { resolveIgnorePatterns } from "./utils/glob-utils.js";
 
@@ -22,21 +23,6 @@ function resolveWorkspaceRoot(): string {
   if (process.env.WORKSPACE_ROOT) {
     return path.resolve(process.env.WORKSPACE_ROOT);
   }
-
-  let current = process.cwd();
-  for (let i = 0; i < 6; i += 1) {
-    const hasBackend = fs.existsSync(path.join(current, "backend"));
-    const hasFrontend = fs.existsSync(path.join(current, "frontend"));
-    if (hasBackend && hasFrontend) {
-      return current;
-    }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      break;
-    }
-    current = parent;
-  }
-
   return process.cwd();
 }
 
@@ -72,19 +58,32 @@ async function bootstrap(): Promise<void> {
     const httpPort = parseInt(process.env.HTTP_PORT || "3001", 10);
     httpApi = new HttpApiServer(graphStore, clusterConfig, httpPort);
     httpApi.setWorkspaceRoot(workspaceRoot);
+    httpApi.setReady(false);
     await httpApi.start();
   }
 
   // Attempt to load from snapshot for faster startup
-  const snapshot = await loadSnapshot(snapshotPath);
+  await cleanupTempSnapshots(snapshotPath);
+  const maxAgeDays = parseInt(process.env.GRAPH_SNAPSHOT_MAX_AGE ?? "7", 10);
+  const stale = await isSnapshotStale(snapshotPath, maxAgeDays);
+  if (stale) {
+    console.error(`[live-context-manager] snapshot is older than ${maxAgeDays} days — discarding for full re-index`);
+  }
+  const snapshot = stale ? null : await loadSnapshot(snapshotPath);
   let initial: { indexedFiles: number };
 
   if (snapshot) {
+    const snapshotSizeKb = Math.round(JSON.stringify(snapshot).length / 1024);
+    const snapshotAgeSec = (Date.now() - new Date(snapshot.createdAt).getTime()) / 1000;
+    const snapshotAgeMin = Math.round(snapshotAgeSec / 60);
     console.error(`[live-context-manager] loading snapshot (${snapshot.fileCount} files, ${snapshot.nodeCount} nodes)`);
     graphStore.importFromSnapshot(snapshot.graph, snapshot.fileHashes);
     const delta = await indexer.buildDeltaGraph(snapshot.fileHashes);
     console.error(
       `[live-context-manager] delta: reused=${delta.reused} reparsed=${delta.reparsed} deleted=${delta.deleted}`,
+    );
+    console.error(
+      `[graph-store] loaded snapshot: ${snapshot.nodeCount} nodes, ${snapshot.edgeCount} edges, ${snapshotSizeKb} KB, age ${snapshotAgeMin} min`,
     );
     initial = { indexedFiles: delta.reused + delta.reparsed };
   } else {
@@ -103,6 +102,7 @@ async function bootstrap(): Promise<void> {
 
   console.error(`[live-context-manager] indexed ${initial.indexedFiles} files`);
   if (httpApi) {
+    httpApi.setReady(true);
     httpApi.broadcastSSE("indexing-complete", {
       indexedFiles: initial.indexedFiles,
       timestamp: Date.now(),
@@ -189,6 +189,22 @@ async function bootstrap(): Promise<void> {
   });
   await watcher.start();
 
+  // Watch tsconfig*.json files for alias invalidation
+  const chokidar = await import("chokidar");
+  const tsconfigWatcher = chokidar.watch("**/tsconfig*.json", {
+    cwd: workspaceRoot,
+    ignoreInitial: true,
+    ignored: resolveIgnorePatterns(),
+  });
+  tsconfigWatcher.on("add", (relPath: string) => {
+    const abs = path.join(workspaceRoot, relPath);
+    indexer.tsconfigResolver.invalidate(abs).catch(() => {});
+  });
+  tsconfigWatcher.on("change", (relPath: string) => {
+    const abs = path.join(workspaceRoot, relPath);
+    indexer.tsconfigResolver.invalidate(abs).catch(() => {});
+  });
+
   const server = new McpServer({
     name: "live-context-manager",
     version: "0.1.0",
@@ -203,6 +219,7 @@ async function bootstrap(): Promise<void> {
     if (httpApi) {
       await httpApi.stop();
     }
+    await tsconfigWatcher.close();
     await watcher.stop();
     await clusterConfig.stopWatching();
     await server.close();

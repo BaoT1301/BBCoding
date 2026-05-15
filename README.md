@@ -64,6 +64,12 @@ Expected: the repository clones into `your-project-name/`.
 cd your-project-name
 ```
 
+> **Path portability:** `WORKSPACE_PATH` in `.env.mcp` is resolved relative
+> to this repo's root directory (where `docker-compose.mcp.yml` lives). If
+> you clone this repo to a different directory or use it as a subtool inside
+> another project, update `WORKSPACE_PATH` accordingly. It is NOT relative
+> to your shell's current working directory.
+
 ### Step 3 — Run the setup initializer
 
 ```bash
@@ -363,11 +369,12 @@ from .claude/rules/01-global-master-rules.md.
   verify each `path` value exists in your project root.
 - `WORKSPACE_PATH` is set to the wrong directory → check `.env.mcp` and
   confirm the path points to your project root.
-- The indexer's default glob patterns (`**/*.py`, `**/*.{ts,tsx,js,jsx}`) are
-  workspace-wide and should match any layout. If you still see 0 files, verify
-  `WORKSPACE_PATH` in `.env.mcp` points to your project root. To narrow the
-  scope, set `PYTHON_WATCH_GLOBS` and `TS_WATCH_GLOBS` in `.env.mcp`. To add
-  custom excludes, set `WATCH_IGNORES` (comma-separated, brace-expansion safe).
+- The indexer watches the entire workspace root (`.`) by default. To restrict
+  scanning, set `TS_WATCH_GLOBS` and `PYTHON_WATCH_GLOBS` in `.env.mcp`.
+  The default ignore patterns exclude: `node_modules`, `dist`, `.git`,
+  `__pycache__`, `.next`, `.venv`, `coverage`, `build`, `.mcp-cache`, and
+  `mcp-context-*` service directories. Override with `WATCH_IGNORES`
+  (comma-separated, brace-expansion safe).
 
 ### 3. AI tool can't find the MCP server
 
@@ -389,11 +396,17 @@ connection error.
 
 **Causes and fixes:**
 - `mcp-context-manager` is not yet healthy when the UI starts → wait 30–60 s
-  and refresh. The UI depends on the manager reaching `healthy`.
+  and refresh. The UI depends on the manager reaching `healthy`. If
+  `./mcp.sh up` printed "✓ Graph ready", the service is fully indexed and
+  the UI should populate on refresh.
+- The readiness probe (`/api/ready`) returns `{ "ready": false }` until
+  initial indexing completes — this is normal on first start or after a cold
+  boot. Run `./mcp.sh doctor` to check current status.
 - Host firewall is blocking port 8080 → temporarily disable the firewall or
   add an exception for port 8080.
-- Memory limit hit on large workspaces → the container is capped at 512 MB.
-  Raise `deploy.resources.limits.memory` in `docker-compose.mcp.yml` if needed.
+- Memory limit hit on large workspaces → the container is capped at 1536 MB
+  by default. Raise `deploy.resources.limits.memory` in
+  `docker-compose.mcp.yml` if needed (also update `NODE_OPTIONS` accordingly).
 
 ### 5. Docs say X but the code does Y
 

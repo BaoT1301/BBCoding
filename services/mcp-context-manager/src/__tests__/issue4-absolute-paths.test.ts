@@ -240,4 +240,43 @@ describe("Issue #4: Absolute Docker path → relative path stripping for cluster
       await httpApi.stop();
     }
   });
+
+  it("extension-style alias: resolvedImports from @/* alias are treated as workspace edges", async () => {
+    // Simulate a file that had its @/* alias resolved to an extension/src path
+    // (as TsconfigResolver would produce). The graph should contain the edge.
+    process.env.WORKSPACE_ROOT = "/workspace";
+
+    graphStore.upsertFileResult(
+      makeFileResult("/workspace/extension/src/bridge/supabase.ts", "typescript"),
+    );
+    graphStore.upsertFileResult(
+      makeFileResult(
+        "/workspace/extension/src/ui/foo.ts",
+        "typescript",
+        ["/workspace/extension/src/bridge/supabase.ts"],
+      ),
+    );
+
+    const port = 18700 + Math.floor(Math.random() * 900);
+    const httpApi = new HttpApiServer(graphStore, clusterConfig, port);
+    await httpApi.start();
+
+    try {
+      const response = await fetch(`http://localhost:${port}/api/v1/mcp/graph?scope=repo`);
+      const data = await response.json();
+
+      // Both files should be present as nodes
+      const filePaths = data.nodes
+        .filter((n: any) => n.type === "file")
+        .map((n: any) => n.filePath as string);
+
+      expect(filePaths.some((p: string) => p.includes("bridge/supabase"))).toBe(true);
+      expect(filePaths.some((p: string) => p.includes("ui/foo"))).toBe(true);
+
+      // The import edge should exist
+      expect(data.edges.length).toBeGreaterThan(0);
+    } finally {
+      await httpApi.stop();
+    }
+  });
 });

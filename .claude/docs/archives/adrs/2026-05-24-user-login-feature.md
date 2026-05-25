@@ -1,0 +1,3 @@
+# ADR: User Login Feature (2026-05-24)
+
+Implemented email/password authentication with JWT httpOnly cookies across a greenfield FastAPI backend (`/backend`) and React 19 + Vite frontend (`/frontend`), using a 5-track parallel sprint reviewed by `integration_reviewer` before merge. Auth transport is a `SameSite=Lax` httpOnly cookie (`access_token`, HS256 JWT) with separate 1-day / 30-day `Max-Age` values controlled by a `remember_me` flag; rate limiting on `/login` is enforced at 5 req/min per IP via slowapi. The integration review caught and resolved two issues before approval: missing Track 5 page components and a too-broad 401 interceptor that would have swallowed inline login error messages.

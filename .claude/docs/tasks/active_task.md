@@ -1,1 +1,1 @@
-No active sprint. Last completed: Sprint 5 — MCP Template Bugfix (2026-05-14).
+No active sprint. Last completed: User Login Feature (2026-05-24).

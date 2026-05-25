@@ -1,0 +1,72 @@
+# Application stack — FastAPI backend + React/Vite frontend
+# Independent from docker-compose.mcp.yml; uses app-network (NOT mcp-network).
+#
+# Usage:
+#   ./app.sh up       — Start services (dev profile: backend + vite hot-reload)
+#   ./app.sh down     — Stop services
+#   ./app.sh build    — Build Docker images
+#   ./app.sh logs     — Tail logs
+#   ./app.sh status   — Show container status
+#   ./app.sh test     — Smoke test: poll /api/health, then tear down
+
+services:
+  # ─── Backend (FastAPI + uvicorn) ─────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+    container_name: app-backend
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "8000:8000"
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ─── Frontend dev — Vite hot-reload (profile: dev) ───────────────────────
+  frontend:
+    profiles: [dev]
+    build:
+      context: ./frontend
+      target: dev
+    container_name: app-frontend-dev
+    environment:
+      - BACKEND_URL=http://backend:8000
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    networks:
+      - app-network
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ─── Frontend prod — nginx serving compiled dist/ (profile: prod) ────────
+  frontend-prod:
+    profiles: [prod]
+    build:
+      context: ./frontend
+      target: prod
+    container_name: app-frontend-prod
+    ports:
+      - "80:80"
+    networks:
+      - app-network
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  app-network:
+    driver: bridge

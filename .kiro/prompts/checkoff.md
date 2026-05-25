@@ -1,1 +1,0 @@
-Adopt the `knowledge_manager` persona. Execute the final track in the active_task.md . Review drafts in `.claude/docs/reviews/`. Summarize proposed architectural changes and HALT to ask for my approval. Once approved, update the codebase docs, squash the history,  **and check off the completed tracks as [x] in the /epics Master Ledger.**

@@ -1,5 +1,0 @@
-{
-  "clusters": [
-    { "id": "mcp-context-manager", "path": "services/mcp-context-manager/src/", "label": "MCP Context Manager", "color": "#4A90D9" },
-    { "id": "mcp-context-ui", "path": "services/mcp-context-ui/src/", "label": "MCP Context UI", "color": "#E28A4A" }]
-}
